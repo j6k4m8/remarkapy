@@ -42,3 +42,4 @@ This is my attempt to make a simple, easy-to-use Python package for interacting 
 - [ ] Rename folders
 - [ ] Syncing to a local directory
 - [ ] Syncing from a local directory
+- [ ] Device registration from a short code
