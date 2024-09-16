@@ -10,6 +10,7 @@ import pathlib
 import httpx
 
 from .configfile import RemarkapyConfig, get_config_or_raise
+from .entries import Entry, parse_entries
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +23,8 @@ class URLS:
     AUTH_HOST = "https://webapp-prod.cloud.remarkable.engineering"
     NEW_USER_TOKEN = f"{AUTH_HOST}/token/json/2/user/new"
 
-    DOC_HOST = (
-        "https://document-storage-production-dot-remarkable-production.appspot.com"
-    )
-    LIST_DOCS = f"{DOC_HOST}/document-storage/json/2/docs"
+    SYNC_URL = "https://internal.cloud.remarkable.com"
+    LIST_DOCS = f"{SYNC_URL}/doc/v2/files"
 
 
 class Client:
@@ -69,6 +68,9 @@ class Client:
             IOError: If the config file cannot be written to.
 
         """
+        print(f"Device: [{self._config.devicetoken}]")
+        print(f"User: [{self._config.usertoken}]")
+        return
         try:
             with open(self._config_filepath, "w") as f:
                 # Write two :-separated key-value pairs
@@ -96,7 +98,7 @@ class Client:
         response = httpx.post(url, json=data, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code}: {response.text}"
+                f"Request failed with status code {response.status_code} when POSTing to {url}: {response.text}"
             )
         return response
 
@@ -117,7 +119,7 @@ class Client:
         response = httpx.get(url, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code}: {response.text}"
+                f"Request failed with status code {response.status_code} when GETting from {url}: {response.text}"
             )
         return response
 
@@ -150,7 +152,7 @@ class Client:
         self._config.devicetoken = new_token
         self._dump_config()
 
-    def list_documents(self):
+    def list_documents(self) -> list[Entry]:
         """
         List all documents in the user's account.
 
@@ -173,4 +175,9 @@ class Client:
             "user-agent": "remarkapy",
         }
         response = self._get(url, headers=headers)
-        return response.json()
+        if not response.status_code == 200:
+            raise RemarkableAPIError(
+                f"Request failed with status code {response.status_code} when listing documents: {response.text}"
+            )
+        results = response.json()
+        return parse_entries(results, fail_method="warn")
