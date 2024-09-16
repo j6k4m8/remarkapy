@@ -13,5 +13,7 @@ dependencies = [
 [tool.uv]
 dev-dependencies = [
     "ipykernel>=6.29.5",
+    "pytest-watch>=4.2.0",
+    "pytest>=8.3.3",
     "ruff>=0.6.5",
 ]
