@@ -6,7 +6,7 @@ The API calls themselves are handled by the Client class.
 
 import logging
 import pathlib
-
+import uuid
 import httpx
 
 from .configfile import RemarkapyConfig, get_config_or_raise
@@ -15,16 +15,22 @@ from .entries import Entry, parse_entries
 logger = logging.getLogger(__name__)
 
 
-class RemarkableAPIError(Exception): ...
+class RemarkableAPIError(Exception):
+    ...
 
 
 class URLS:
     # https://github.com/juruen/rmapi/blob/master/config/url.go
+    # NOTE Webapp endpoints could be fetched on every init
+    # https://eu.tectonic.remarkable.com/discovery/v1/endpoints
     AUTH_HOST = "https://webapp-prod.cloud.remarkable.engineering"
+    REGISTER_DEVICE = f"{AUTH_HOST}/token/json/2/device/new"
     NEW_USER_TOKEN = f"{AUTH_HOST}/token/json/2/user/new"
 
     SYNC_URL = "https://internal.cloud.remarkable.com"
-    LIST_DOCS = f"{SYNC_URL}/doc/v2/files"
+    CLOUD_HOST = "https://eu.tectonic.remarkable.com"
+    LIST_ROOT = f"{CLOUD_HOST}/sync/v4/root"
+    GET_FILE = f"{CLOUD_HOST}'/sync/v3/files/{hash}"
 
 
 class Client:
@@ -149,7 +155,38 @@ class Client:
         response = self._post(url, headers=headers, data={})
         # response.text
         new_token = response.text
-        self._config.devicetoken = new_token
+        self._config.usertoken = new_token
+        self._dump_config()
+
+    def _register_device(self, code: str):
+        """
+        Registers as an app/device on Remarkable Cloud with a random UUID
+
+        Must provide a valid deviceDesc otherwise it would fail
+
+        Arguments:
+            code: Verification code from https://my.remarkable.com/pair/app
+
+        Returns:
+            A device token
+
+        Raises:
+            RemarkableAPIError: If the request fails.
+
+        """
+
+        data = {
+            "code": code,
+            "deviceDesc": "desktop-macos",
+            "deviceID": str(uuid.uuid4()),
+            "secret": ""
+        }
+
+        url = URLS.REGISTER_DEVICE
+        response = self._post(url, headers=headers, json=data)
+
+        device_token = response.text
+        self._config.devicetoken = device_token
         self._dump_config()
 
     def list_documents(self) -> list[Entry]:
@@ -174,6 +211,7 @@ class Client:
             "Authorization": f"Bearer {self._config.usertoken}",
             "user-agent": "remarkapy",
         }
+        
         response = self._get(url, headers=headers)
         if not response.status_code == 200:
             raise RemarkableAPIError(
