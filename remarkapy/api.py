@@ -30,7 +30,7 @@ class URLS:
     SYNC_URL = "https://internal.cloud.remarkable.com"
     CLOUD_HOST = "https://eu.tectonic.remarkable.com"
     LIST_ROOT = f"{CLOUD_HOST}/sync/v4/root"
-    GET_FILE = f"{CLOUD_HOST}'/sync/v3/files/{hash}"
+    GET_FILE = f"{CLOUD_HOST}/sync/v3/files/"
 
 
 class Client:
@@ -74,8 +74,8 @@ class Client:
             IOError: If the config file cannot be written to.
 
         """
-        print(f"Device: [{self._config.devicetoken}]")
-        print(f"User: [{self._config.usertoken}]")
+        # print(f"Device: [{self._config.devicetoken}]")
+        # print(f"User: [{self._config.usertoken}]")
         return
         try:
             with open(self._config_filepath, "w") as f:
@@ -206,16 +206,75 @@ class Client:
             RemarkableAPIError: If the request fails.
 
         """
-        url = URLS.LIST_DOCS
+
+        self._refresh_token()
+
+        url = URLS.LIST_ROOT
         headers = {
             "Authorization": f"Bearer {self._config.usertoken}",
             "user-agent": "remarkapy",
         }
-        
+
         response = self._get(url, headers=headers)
         if not response.status_code == 200:
             raise RemarkableAPIError(
                 f"Request failed with status code {response.status_code} when listing documents: {response.text}"
             )
-        results = response.json()
-        return parse_entries(results, fail_method="warn")
+
+        # NOTE we could store this hash somewhere as it probably changes only
+        # when a folder/file gets created/modified (if we decide to cache some data)
+        root_hash = response.json()['hash']
+
+        # List doc hashes on root folder
+        url = URLS.GET_FILE + root_hash
+        response = self._get(url, headers=headers)
+        obj_list = response.text.splitlines()
+
+        root = {}
+
+        for i in range(1, len(obj_list)):
+            obj_hash = obj_list[i].split(':')[0]
+
+            url = URLS.GET_FILE + obj_hash
+            response = self._get(url, headers=headers)
+
+            file_list = []
+            file_data = response.text.splitlines()
+            metadata = None
+
+            for j in range(1, len(file_data)):
+                obj_data = file_data[j].split(':')
+                obj_hash = obj_data[0]
+                obj_name = obj_data[2]
+
+                print('Hash %s**** | ****%s' % (obj_hash[0:5], obj_name[-25:]))
+
+                # Add to files
+                file_list.append({'hash': obj_hash,
+                                  'fileName': obj_name,
+                                  'format': obj_name.split(':')[-1].split('.')[-1]})
+
+                # Only gets metadata
+                if '.metadata' in obj_name:
+                    url = URLS.GET_FILE + obj_hash
+                    response = self._get(url, headers=headers)
+
+                    json_data = response.json()
+
+
+                    # Skip folders
+                    if json_data['type'] == 'CollectionType':
+                        continue
+
+                    metadata = json_data
+                    print('-> ' + metadata['visibleName'])
+                    print('[Page %d]' % metadata['lastOpenedPage'])
+
+            if metadata and not metadata['type'] == 'CollectionType':
+                if metadata['parent'] not in root:
+                    root[metadata['parent']] = []
+
+                root[metadata['parent']].append({'files': file_list, **metadata})
+
+        return root
+        # return parse_entries(results, fail_method="warn")
