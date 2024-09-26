@@ -232,49 +232,131 @@ class Client:
 
         root = {}
 
+        # Add a file or a folder to a specific parent_hash or to root
+        def add_item_to_folder(folders, folder_hash: str, parent_hash: str = "", visible_name: str = "", metadata: dict = None, files: list = None):
+
+            # Trash is a special folder which doesn''t have a specific hash, just "trash"
+            if parent_hash == "trash":
+
+                if "trash" not in folders:
+                    folders["trash"] = {
+                        "visibleName": "Trash",
+                        "subfolders": {},
+                        "docs": {}
+                    }
+
+            # Recursively find or create a folder
+            def find_or_create_folder(folders, target_hash, parent_hash, visible_name):
+                # If no parent, add at root level
+                if not parent_hash:
+                    if target_hash not in folders:
+                        folders[target_hash] = {
+                            'name': visible_name,
+                        }
+
+                        if not metadata:
+                            folders[target_hash]['subfolders'] = {}
+
+                    return folders[target_hash]
+
+                for existing_folder_hash, folder_data in folders.items():
+
+                    if existing_folder_hash == parent_hash:
+                        if target_hash not in folder_data['subfolders']:
+                            folder_data['subfolders'][target_hash] = {
+                                'name': visible_name,
+                            }
+                            if not metadata:
+                                folder_data['subfolders'][target_hash]['subfolders'] = {
+                                }
+
+                        return folder_data['subfolders'][target_hash]
+
+                    if 'subfolders' in folder_data:
+                        found_folder = find_or_create_folder(
+                            folder_data['subfolders'], target_hash, parent_hash, visible_name)
+                        if found_folder:
+                            return found_folder
+
+                return None
+
+            current_folder = find_or_create_folder(
+                folders, folder_hash, parent_hash, visible_name)
+
+            print(
+                f"Trying to find or create folder: {folder_hash} - parent hash: {parent_hash}")
+
+            if current_folder is None:
+                raise (
+                    f"Unable to find or create folder with hash: {folder_hash}")
+
+            # Add metadata or files to item/folder
+            if metadata:
+                current_folder['metadata'] = metadata
+                current_folder['files'] = {}
+
+                if files:
+                    current_folder['files'] = files
+
+                return True
+
+            return False
+
+        # First pass: Collect all folders and their relationships
         for i in range(1, len(obj_list)):
-            obj_hash = obj_list[i].split(':')[0]
+            obj_data = obj_list[i].split(':')
+            obj_hash = obj_data[0]
+            obj_folder_hash = obj_data[2]
 
             url = URLS.GET_FILE + obj_hash
             response = self._get(url, headers=headers)
 
-            file_list = []
             file_data = response.text.splitlines()
-            metadata = None
+
+            # Files
+            files = []
+            current_item_key = ''
+            current_parent_key = ''
 
             for j in range(1, len(file_data)):
                 obj_data = file_data[j].split(':')
                 obj_hash = obj_data[0]
                 obj_name = obj_data[2]
 
-                print('Hash %s**** | ****%s' % (obj_hash[0:5], obj_name[-25:]))
+                print('Hash %s | ****%s | Folder hash %s' % (obj_hash, obj_name[-25:], obj_folder_hash))
 
-                # Add to files
-                file_list.append({'hash': obj_hash,
-                                  'fileName': obj_name,
-                                  'format': obj_name.split(':')[-1].split('.')[-1]})
-
-                # Only gets metadata
+                # Only process metadata if it's a metadata file
                 if '.metadata' in obj_name:
                     url = URLS.GET_FILE + obj_hash
                     response = self._get(url, headers=headers)
 
                     json_data = response.json()
 
-
-                    # Skip folders
-                    if json_data['type'] == 'CollectionType':
+                    if 'type' not in json_data:
                         continue
 
-                    metadata = json_data
-                    print('-> ' + metadata['visibleName'])
-                    print('[Page %d]' % metadata['lastOpenedPage'])
+                    # Handle folders (CollectionType)
+                    # Will look for a parent hash, if any
+                    if json_data['type'] == 'CollectionType':
+                        add_item_to_folder(
+                            folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash, visible_name=json_data['visibleName'])
+                        continue
 
-            if metadata and not metadata['type'] == 'CollectionType':
-                if metadata['parent'] not in root:
-                    root[metadata['parent']] = []
+                    # Regular document metadata processing
+                    current_item_key = json_data['visibleName']
+                    # Get the parent folder using hash
+                    current_parent_key = json_data['parent']
 
-                root[metadata['parent']].append({'files': file_list, **metadata})
+                # Collect file information
+                file_info = {
+                    'hash': obj_hash,
+                    'fileName': obj_name,
+                    'format': obj_name.split('.')[-1]
+                }
+
+                files.append(file_info)
+
+            add_item_to_folder(folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash, visible_name=json_data['visibleName'], metadata=json_data, files=files)
 
         return root
         # return parse_entries(results, fail_method="warn")
