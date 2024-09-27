@@ -52,6 +52,9 @@ def get_config_or_raise(
         FileNotFoundError: If the configuration file is not found.
 
     """
+
+    config_path = ""
+
     if config_path_override is not None:
         config_path = pathlib.Path(config_path_override)
 
@@ -86,23 +89,20 @@ def get_config_or_raise(
                 config_path = option
                 break
 
-        else:
-            raise FileNotFoundError(
-                "Configuration file not found. Tried the following locations: "
-                + ", ".join([str(x) for x in options])
-            )
+    config = {"usertoken": "", "devicetoken": ""}
 
-    config = {}
-
-    with open(config_path, "r") as f:
-        for line in f:
-            if line.strip().startswith("#"):
-                continue
-            line_parts = line.strip().split(":", 1)
-            if len(line_parts) != 2:
-                continue
-            key, value = line_parts
-            config[key.strip()] = value.strip()
+    if config_path:
+        with open(config_path, "r") as f:
+            for line in f:
+                if line.strip().startswith("#"):
+                    continue
+                line_parts = line.strip().split(":", 1)
+                if len(line_parts) != 2:
+                    continue
+                key, value = line_parts
+                config[key.strip()] = value.strip()
+    else:
+        config_path = pathlib.Path.home() / ".rmapi"
 
     if return_path:
         return (

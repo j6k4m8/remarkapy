@@ -19,6 +19,10 @@ class RemarkableAPIError(Exception):
     ...
 
 
+class ExpiredToken(RemarkableAPIError):
+    ...
+
+
 class URLS:
     # https://github.com/juruen/rmapi/blob/master/config/url.go
     # NOTE Webapp endpoints could be fetched on every init
@@ -52,10 +56,11 @@ class Client:
                 configuration will be loaded from the default location.
 
         """
+
         self._config, self._config_filepath = get_config_or_raise(
             configfile, return_path=True
         )
-        # self._refresh_token()
+        self._refresh_token()
 
     def _dump_config(self):
         """
@@ -76,7 +81,6 @@ class Client:
         """
         # print(f"Device: [{self._config.devicetoken}]")
         # print(f"User: [{self._config.usertoken}]")
-        return
         try:
             with open(self._config_filepath, "w") as f:
                 # Write two :-separated key-value pairs
@@ -102,7 +106,13 @@ class Client:
 
         """
         response = httpx.post(url, json=data, **kwargs)
-        if response.status_code != 200:
+
+        # Device has been unpaired
+        # NOTE could call device registration method
+        if response.status_code == 401:
+            raise ExpiredToken(
+                f"Device token has expired. Was the device unpaired?")
+        elif response.status_code != 200:
             raise RemarkableAPIError(
                 f"Request failed with status code {response.status_code} when POSTing to {url}: {response.text}"
             )
@@ -147,13 +157,17 @@ class Client:
             RemarkableAPIError: If the token cannot be refreshed.
 
         """
+
+        if not self._config.devicetoken:
+            self.register_device_wizard()
+
         url = URLS.NEW_USER_TOKEN
         headers = {
             "Authorization": f"Bearer {self._config.devicetoken}",
             "user-agent": "remarkapy",
         }
+
         response = self._post(url, headers=headers, data={})
-        # response.text
         new_token = response.text
         self._config.usertoken = new_token
         self._dump_config()
@@ -182,12 +196,36 @@ class Client:
             "secret": ""
         }
 
-        url = URLS.REGISTER_DEVICE
-        response = self._post(url, headers=headers, json=data)
+        headers = {'User-Agent': 'desktop/3.14.0.887 (macos 15.0)'}
 
-        device_token = response.text
-        self._config.devicetoken = device_token
-        self._dump_config()
+        url = URLS.REGISTER_DEVICE
+        response = self._post(url, headers=headers, data=data, timeout=20)
+
+        if response.status_code == 200:
+            device_token = response.text
+            self._config.devicetoken = device_token
+            self._dump_config()
+            return True, "Device registered"
+        else:
+            return False, response.text
+
+    def register_device_wizard(self):
+
+        print('\n=== REMARKABLE CLOUD ===')
+        print(
+            'Please visit https://my.remarkable.com/pair/app and enter the code shown')
+
+        code = ''
+
+        while len(code) != 8:
+            try:
+                code = input('Verification code: ').strip()
+            except KeyboardInterrupt:
+                raise KeyboardInterrupt
+
+        res, msg = self._register_device(code)
+
+        print(msg)
 
     def list_documents(self) -> list[Entry]:
         """
@@ -206,8 +244,6 @@ class Client:
             RemarkableAPIError: If the request fails.
 
         """
-
-        self._refresh_token()
 
         url = URLS.LIST_ROOT
         headers = {
@@ -323,7 +359,8 @@ class Client:
                 obj_hash = obj_data[0]
                 obj_name = obj_data[2]
 
-                print('Hash %s | ****%s | Folder hash %s' % (obj_hash, obj_name[-25:], obj_folder_hash))
+                print('Hash %s | ****%s | Folder hash %s' %
+                      (obj_hash, obj_name[-25:], obj_folder_hash))
 
                 # Only process metadata if it's a metadata file
                 if '.metadata' in obj_name:
@@ -356,7 +393,8 @@ class Client:
 
                 files.append(file_info)
 
-            add_item_to_folder(folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash, visible_name=json_data['visibleName'], metadata=json_data, files=files)
+            add_item_to_folder(folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash,
+                               visible_name=json_data['visibleName'], metadata=json_data, files=files)
 
         return root
         # return parse_entries(results, fail_method="warn")
