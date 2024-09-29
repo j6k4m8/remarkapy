@@ -9,7 +9,8 @@ import pathlib
 import uuid
 import httpx
 from datetime import datetime
-
+import crc32c
+import base64
 from .configfile import RemarkapyConfig, get_config_or_raise
 from .entries import Entry, parse_entries
 
@@ -201,6 +202,68 @@ class Client:
         url = URLS.SYNC_FILE
         self._put(url, headers=headers, json=data)
 
+    def _calculate_checksum(self, input_file:bytes):
+
+        # Calculate CRC32C checksum
+        crc32c_checksum = crc32c.crc32c(input_file)
+
+        # Convert to base64
+        crc32c_bytes = crc32c_checksum.to_bytes(4, byteorder='big')
+        crc32c_base64 = base64.b64encode(crc32c_bytes).decode('utf-8')
+
+        # print(f"CRC32C Checksum (Base64): {crc32c_base64}")
+
+        return crc32c_base64
+
+    def _preparare_metadata(self, metadata:dict):
+
+        """
+
+        Arguments:
+            metadata : dict
+
+        Returns:
+            A formatted metadata string that can be CRCd with _calculate_checksum()
+
+        Raises:
+            None
+
+        """
+
+        # trying this approach to maintain indentation. Otherwise CRC would mismatach
+        # TODO find a better solution?
+        metadata_raw = f'''{{
+    "createdTime": "{metadata['createdTime']}",
+    "lastModified": "{metadata['lastModified']}",
+    "lastOpened": "{metadata['lastOpened']}",
+    "lastOpenedPage": "{metadata['lastOpenedPage']}",
+    "parent": "{metadata['parent']}",
+    "pinned": {metadata['pinned']},
+    "type": "{metadata['type']}",
+    "visibleName": "{metadata['visibleName']}"
+}}
+'''
+        return metadata_raw
+
+    def rename_file(self, metadata_hash:str, new_name:str):
+
+        # Should get file first and extract metadata
+        response = self._get_file_by_hash(obj_hash=metadata_hash)
+
+        metadata = response.json()
+        
+        # Replace name without changing any other info
+        metadata['visibleName'] = new_name
+        metadata_raw = self._preparare_metadata(metadata)
+
+        # Convert str to bytes
+        input_bytes = metadata_raw.encode('utf-8')
+
+        checksum = self._calculate_checksum(input_bytes)
+
+        print(checksum)
+
+
     def _refresh_token(self):
         """
         Refresh the user token if it is expired.
@@ -289,6 +352,25 @@ class Client:
 
         print(msg)
 
+    def _get_file_by_hash(self, obj_hash:str):
+        
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+        }
+
+        url = URLS.GET_FILE + obj_hash
+        return self._get(url, headers=headers)
+
+    def _get_root_folder(self):
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+        }
+
+        url = URLS.LIST_ROOT
+        return self._get(url, headers=headers)
+
     def list_documents(self) -> list[Entry]:
         """
         List all documents in the user's account.
@@ -307,27 +389,15 @@ class Client:
 
         """
 
-        url = URLS.LIST_ROOT
-        headers = {
-            "Authorization": f"Bearer {self._config.usertoken}",
-            "user-agent": "remarkapy",
-        }
-
-        response = self._get(url, headers=headers)
-        if not response.status_code == 200:
-            raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when listing documents: {response.text}"
-            )
+        response = self._get_root_folder()
 
         # NOTE we could store this hash somewhere as it probably changes only
         # when a folder/file gets created/modified (if we decide to cache some data)
         root_hash = response.json()['hash']
 
         # List doc hashes on root folder
-        url = URLS.GET_FILE + root_hash
-        response = self._get(url, headers=headers)
+        response = self._get_file_by_hash(obj_hash=root_hash)
         obj_list = response.text.splitlines()
-
         root = {}
 
         # Add a file or a folder to a specific parent_hash or to root
@@ -406,9 +476,7 @@ class Client:
             obj_hash = obj_data[0]
             obj_folder_hash = obj_data[2]
 
-            url = URLS.GET_FILE + obj_hash
-            response = self._get(url, headers=headers)
-
+            response = self._get_file_by_hash(obj_hash=obj_hash)
             file_data = response.text.splitlines()
 
             # Files
@@ -421,15 +489,16 @@ class Client:
                 obj_hash = obj_data[0]
                 obj_name = obj_data[2]
 
-                print('Hash %s | ****%s | Folder hash %s' %
-                      (obj_hash, obj_name[-25:], obj_folder_hash))
+                print('Hash %s | %s | Folder hash %s' %
+                      (obj_hash, obj_name, obj_folder_hash))
 
                 # Only process metadata if it's a metadata file
                 if '.metadata' in obj_name:
-                    url = URLS.GET_FILE + obj_hash
-                    response = self._get(url, headers=headers)
+                    response = self._get_file_by_hash(obj_hash=obj_hash)
 
                     json_data = response.json()
+
+                    print(json_data)
 
                     if 'type' not in json_data:
                         continue
