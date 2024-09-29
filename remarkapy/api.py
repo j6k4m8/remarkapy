@@ -238,7 +238,7 @@ class Client:
     "lastOpened": "{metadata['lastOpened']}",
     "lastOpenedPage": "{metadata['lastOpenedPage']}",
     "parent": "{metadata['parent']}",
-    "pinned": {metadata['pinned']},
+    "pinned": {str(metadata['pinned']).lower()},
     "type": "{metadata['type']}",
     "visibleName": "{metadata['visibleName']}"
 }}
@@ -264,18 +264,20 @@ class Client:
 
         return self._put(url, headers=headers, data=metadata_raw)
 
-
     def rename_file(self, metadata_hash:str, new_name:str):
+
+        self._get_root_folder()
 
         # Should get file first and extract metadata
         response = self._get_file_by_hash(obj_hash=metadata_hash)
-
         metadata = response.json()
-        
+
         # Replace name without changing any other info
         metadata['visibleName'] = new_name
         
-        return self._put_file(metadata_hash, metadata)
+        self._put_file(metadata_hash, metadata)
+
+        # TODO re-attach metadata to content
 
     def _refresh_token(self):
         """
@@ -411,6 +413,8 @@ class Client:
         # List doc hashes on root folder
         response = self._get_file_by_hash(obj_hash=root_hash)
         obj_list = response.text.splitlines()
+
+        print(obj_list)
         root = {}
 
         # Add a file or a folder to a specific parent_hash or to root
@@ -491,6 +495,8 @@ class Client:
 
             response = self._get_file_by_hash(obj_hash=obj_hash)
             file_data = response.text.splitlines()
+
+            print(response.text)
 
             # Files
             files = []
