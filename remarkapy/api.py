@@ -8,6 +8,7 @@ import logging
 import pathlib
 import uuid
 import httpx
+from datetime import datetime
 
 from .configfile import RemarkapyConfig, get_config_or_raise
 from .entries import Entry, parse_entries
@@ -31,10 +32,13 @@ class URLS:
     REGISTER_DEVICE = f"{AUTH_HOST}/token/json/2/device/new"
     NEW_USER_TOKEN = f"{AUTH_HOST}/token/json/2/user/new"
 
-    SYNC_URL = "https://internal.cloud.remarkable.com"
+    # SYNC_URL = "https://internal.cloud.remarkable.com"
     CLOUD_HOST = "https://eu.tectonic.remarkable.com"
     LIST_ROOT = f"{CLOUD_HOST}/sync/v4/root"
     GET_FILE = f"{CLOUD_HOST}/sync/v3/files/"
+
+    # SYNC
+    SYNC_FILE = f"{CLOUD_HOST}/sync/v3/root"
 
 
 class Client:
@@ -138,6 +142,64 @@ class Client:
                 f"Request failed with status code {response.status_code} when GETting from {url}: {response.text}"
             )
         return response
+
+    def _put(self, url: str, **kwargs) -> httpx.Response:
+        """
+        Make a PUT request to the reMarkable API.
+
+        Arguments:
+            url: The URL to make the request to.
+
+        Returns:
+            The response from the server.
+
+        Raises:
+            RemarkableAPIError: If the request fails.
+
+        """
+        response = httpx.put(url, **kwargs)
+        if response.status_code != 200:
+            raise RemarkableAPIError(
+                f"Request failed with status code {response.status_code} when PUTting to {url}: {response.text}"
+            )
+        return response
+
+    def _sync_file(self, file_hash:str):
+
+        """
+        Refresh the server side cached copy. This method should probably be called after any create, update or deletion of a file.
+
+        Arguments:
+            hash: hash of the file you uploaded / modified
+
+        Returns:
+            None
+
+        Raises:
+            RemarkableAPIError: 
+        """
+
+        if len(file_hash) != 64:
+            raise ValueError(f"Expected a 64 char hash")
+
+        # Get current time in microseconds
+        now = datetime.now()
+        timestamp_ms = int(now.timestamp() * 1_000_000)
+
+        data = {
+            "broadcast": True,
+            "generation": timestamp_ms,
+            "hash": file_hash
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+            "rm-filename": "roothash",
+        }
+    
+        url = URLS.SYNC_FILE
+        self._put(url, headers=headers, json=data)
 
     def _refresh_token(self):
         """
