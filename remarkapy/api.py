@@ -230,7 +230,7 @@ class Client:
 
         """
 
-        # trying this approach to maintain indentation. Otherwise CRC would mismatach
+        # trying this approach to maintain indentation. Otherwise CRC would mismatch
         # TODO find a better solution?
         metadata_raw = f'''{{
     "createdTime": "{metadata['createdTime']}",
@@ -245,6 +245,26 @@ class Client:
 '''
         return metadata_raw
 
+    def _put_file(self, hash, metadata):
+        
+        metadata_raw = self._preparare_metadata(metadata)
+
+        # Convert str to bytes
+        input_bytes = metadata_raw.encode('utf-8')
+
+        checksum = self._calculate_checksum(input_bytes)
+
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+            "x-goog-hash": f"crc32c={checksum}"
+        }
+    
+        url = URLS.GET_FILE + hash
+
+        return self._put(url, headers=headers, data=metadata_raw)
+
+
     def rename_file(self, metadata_hash:str, new_name:str):
 
         # Should get file first and extract metadata
@@ -254,15 +274,8 @@ class Client:
         
         # Replace name without changing any other info
         metadata['visibleName'] = new_name
-        metadata_raw = self._preparare_metadata(metadata)
-
-        # Convert str to bytes
-        input_bytes = metadata_raw.encode('utf-8')
-
-        checksum = self._calculate_checksum(input_bytes)
-
-        print(checksum)
-
+        
+        return self._put_file(metadata_hash, metadata)
 
     def _refresh_token(self):
         """
