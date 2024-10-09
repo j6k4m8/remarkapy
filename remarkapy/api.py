@@ -8,24 +8,23 @@ import logging
 import pathlib
 import uuid
 import httpx
+
 from datetime import datetime
 import crc32c
 import base64
 from .configfile import RemarkapyConfig, get_config_or_raise
-from .entries import Entry, parse_entries
-
-
 from .collections import Collection
+from .entries import Entry, parse_entries
+from .exceptions import (RemarkableAPIError, ExpiredToken, DocumentNotFound)
+
+from .document import Document
+from .folder import Folder
+from typing import Union, Optional
 
 logger = logging.getLogger(__name__)
 
 
-class RemarkableAPIError(Exception):
-    ...
-
-
-class ExpiredToken(RemarkableAPIError):
-    ...
+DocumentOrFolder = Union[Document, Folder]
 
 
 class URLS:
@@ -168,13 +167,12 @@ class Client:
             )
         return response
 
-    def _sync_file(self, file_hash:str):
-
+    def _sync_file(self, file_id: str):
         """
         Refresh the server side cached copy. This method should probably be called after any create, update or deletion of a file.
 
         Arguments:
-            hash: hash of the file you uploaded / modified
+            file_id: id of the file you uploaded / modified
 
         Returns:
             None
@@ -183,8 +181,8 @@ class Client:
             RemarkableAPIError: 
         """
 
-        if len(file_hash) != 64:
-            raise ValueError(f"Expected a 64 char hash")
+        if len(file_id) != 64:
+            raise ValueError(f"Expected a 64 char ID/Hash")
 
         # Get current time in microseconds
         now = datetime.now()
@@ -193,7 +191,7 @@ class Client:
         data = {
             "broadcast": True,
             "generation": timestamp_ms,
-            "hash": file_hash
+            "hash": file_id
         }
 
         headers = {
@@ -201,11 +199,11 @@ class Client:
             "user-agent": "remarkapy",
             "rm-filename": "roothash",
         }
-    
+
         url = URLS.SYNC_FILE
         self._put(url, headers=headers, json=data)
 
-    def _calculate_checksum(self, input_file:bytes):
+    def _calculate_checksum(self, input_file: bytes):
 
         # Calculate CRC32C checksum
         crc32c_checksum = crc32c.crc32c(input_file)
@@ -218,8 +216,7 @@ class Client:
 
         return crc32c_base64
 
-    def _preparare_metadata(self, metadata:dict):
-
+    def _preparare_metadata(self, metadata: dict):
         """
 
         Arguments:
@@ -248,8 +245,8 @@ class Client:
 '''
         return metadata_raw
 
-    def _put_file(self, hash, metadata):
-        
+    def _put_file(self, _id: str, metadata):
+
         metadata_raw = self._preparare_metadata(metadata)
 
         # Convert str to bytes
@@ -262,23 +259,23 @@ class Client:
             "user-agent": "remarkapy",
             "x-goog-hash": f"crc32c={checksum}"
         }
-    
-        url = URLS.GET_FILE + hash
+
+        url = URLS.GET_FILE + _id
 
         return self._put(url, headers=headers, data=metadata_raw)
 
-    def rename_file(self, metadata_hash:str, new_name:str):
+    def rename_file(self, obj_id: str, new_name: str):
 
         self._get_root_folder()
 
         # Should get file first and extract metadata
-        response = self._get_file_by_hash(obj_hash=metadata_hash)
+        response = self._get_file_by_id(obj_id=obj_id)
         metadata = response.json()
 
         # Replace name without changing any other info
         metadata['visibleName'] = new_name
-        
-        self._put_file(metadata_hash, metadata)
+
+        self._put_file(obj_id, metadata)
 
         # TODO re-attach metadata to content
 
@@ -370,14 +367,14 @@ class Client:
 
         print(msg)
 
-    def _get_file_by_hash(self, obj_hash:str):
-        
+    def _get_file_by_id(self, obj_id: str):
+
         headers = {
             "Authorization": f"Bearer {self._config.usertoken}",
             "user-agent": "remarkapy",
         }
 
-        url = URLS.GET_FILE + obj_hash
+        url = URLS.GET_FILE + obj_id
         return self._get(url, headers=headers)
 
     def _get_root_folder(self):
@@ -389,6 +386,75 @@ class Client:
         url = URLS.LIST_ROOT
         return self._get(url, headers=headers)
 
+    # TODO Find a way to fetch folder_id or find a more elegant way to pass this argument
+    def get_item_by_id(self, _id: str, folder_id: str = "") -> Optional[DocumentOrFolder]:
+        """Get a meta item by ID
+
+        Fetch an item from the Remarkable Cloud by ID.
+
+        Args:
+            _id: The id of the item.
+
+        Optional Args:
+            folder_id: folder ID is not contained in the metadata
+
+        Returns:
+            A Document or Folder instance of the requested ID.
+        Raises:
+            DocumentNotFound: When a document cannot be found.
+        """
+
+        response = self._get_file_by_id(obj_id=_id)
+
+        if response.status_code != 200:
+            raise DocumentNotFound(f"Could not find document {_id}")
+
+        # Files contained in the item
+        file_list = response.text.splitlines()
+
+        metadata = None
+        files = []
+
+        for i in range(1, len(file_list)):
+            file_data = file_list[i].split(':')
+            file_id = file_data[0]
+            file_name = file_data[2]
+
+            # print('--- File ID %s | Name "%s"' % (file_id, file_name))
+
+            # Process metadata file
+            if '.metadata' in file_name:
+                response = self._get_file_by_id(obj_id=file_id)
+                json_data = response.json()
+
+                if 'type' not in json_data:
+                    continue
+
+                metadata = json_data
+
+                if folder_id:
+                    metadata['ID'] = folder_id
+                else:
+                    metadata['ID'] = _id
+
+            else:
+
+                # Collect file information
+                file_info = {
+                    'id': file_id,
+                    'fileName': file_name,
+                    'format': file_name.split('.')[-1]
+                }
+
+                files.append(file_info)
+
+        if metadata:
+            metadata['files'] = files
+
+        item = Collection()
+        item.add(metadata)
+
+        return item
 
     def get_items(self) -> Collection:
         """
@@ -413,8 +479,7 @@ class Client:
         root_hash = response.json()['hash']
 
         # print('Root hash -> ' + root_hash)
-        # List doc hashes on root folder
-        response = self._get_file_by_hash(obj_hash=root_hash)
+        response = self._get_file_by_id(obj_id=root_hash)
         obj_list = response.text.splitlines()
 
         collection = Collection()
@@ -423,53 +488,11 @@ class Client:
         for i in range(1, len(obj_list)):
 
             obj_data = obj_list[i].split(':')
-            obj_hash = obj_data[0]
-            obj_folder_hash = obj_data[2]
-            
-            # print('[ Hash %s ] | [Folder hash %s]' % (obj_hash, obj_folder_hash))
+            obj_id = obj_data[0]
+            obj_folder_id = obj_data[2]
 
-            response = self._get_file_by_hash(obj_hash=obj_hash)
-            file_list = response.text.splitlines()
-
-            # Get files
-            metadata = None
-            files = []
-
-            for j in range(1, len(file_list)):
-                file_data = file_list[j].split(':')
-                file_hash = file_data[0]
-                file_name = file_data[2]
-
-                # print('--- File Hash %s | Name "%s"' % (file_hash, file_name))
-
-                # Process metadata file
-                if '.metadata' in file_name:
-                    response = self._get_file_by_hash(obj_hash=file_hash)
-                    json_data = response.json()
-
-                    if 'type' not in json_data:
-                        continue
-
-                    metadata = json_data
-
-                    if json_data['type'] == 'CollectionType':
-                        metadata['ID'] = obj_folder_hash
-                    else:
-                        metadata['ID'] = obj_hash
-
-                else:
-
-                    # Collect file information
-                    file_info = {
-                        'hash': file_hash,
-                        'fileName': file_name,
-                        'format': file_name.split('.')[-1]
-                    }
-
-                    files.append(file_info)
-
-            if metadata:
-                metadata['files'] = files
-                collection.add(metadata)
+            # print('[ ID %s ] | [Folder ID %s]' % (obj_id, obj_folder_id))
+            item = self.get_item_by_id(obj_id, folder_id=obj_folder_id)
+            collection.items.extend(item)
 
         return collection
