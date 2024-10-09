@@ -20,6 +20,7 @@ class Meta(object):
 
     ID = ""
     Type = ""
+    folderID = ""
     visibleName = ""
     createdTime = None
     lastModified = None
@@ -47,6 +48,7 @@ class Meta(object):
         return {
             "ID": self.ID,
             "Type": self.Type,
+            "folderID": self.folderID,
             "visibleName": self.visibleName,
             "createdTime": self.createdTime,
             "lastModified": self.lastModified,

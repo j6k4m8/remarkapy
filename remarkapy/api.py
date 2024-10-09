@@ -433,9 +433,9 @@ class Client:
                 metadata = json_data
 
                 if folder_id:
-                    metadata['ID'] = folder_id
-                else:
-                    metadata['ID'] = _id
+                    metadata['folderID'] = folder_id
+
+                metadata['ID'] = _id
 
             else:
 
