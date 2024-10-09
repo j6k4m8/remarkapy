@@ -14,6 +14,9 @@ import base64
 from .configfile import RemarkapyConfig, get_config_or_raise
 from .entries import Entry, parse_entries
 
+
+from .collections import Collection
+
 logger = logging.getLogger(__name__)
 
 
@@ -386,9 +389,10 @@ class Client:
         url = URLS.LIST_ROOT
         return self._get(url, headers=headers)
 
-    def list_documents(self) -> list[Entry]:
+
+    def get_items(self) -> Collection:
         """
-        List all documents in the user's account.
+        Get all documents in the user's cloud.
 
         This method will make a request to the reMarkable API to retrieve
         a list of documents.
@@ -406,145 +410,66 @@ class Client:
 
         response = self._get_root_folder()
 
-        # NOTE we could store this hash somewhere as it probably changes only
-        # when a folder/file gets created/modified (if we decide to cache some data)
         root_hash = response.json()['hash']
 
+        # print('Root hash -> ' + root_hash)
         # List doc hashes on root folder
         response = self._get_file_by_hash(obj_hash=root_hash)
         obj_list = response.text.splitlines()
 
-        print(obj_list)
-        root = {}
+        collection = Collection()
 
-        # Add a file or a folder to a specific parent_hash or to root
-        def add_item_to_folder(folders, folder_hash: str, parent_hash: str = "", visible_name: str = "", metadata: dict = None, files: list = None):
-
-            # Trash is a special folder which doesn''t have a specific hash, just "trash"
-            if parent_hash == "trash":
-
-                if "trash" not in folders:
-                    folders["trash"] = {
-                        "visibleName": "Trash",
-                        "subfolders": {},
-                        "docs": {}
-                    }
-
-            # Recursively find or create a folder
-            def find_or_create_folder(folders, target_hash, parent_hash, visible_name):
-                # If no parent, add at root level
-                if not parent_hash:
-                    if target_hash not in folders:
-                        folders[target_hash] = {
-                            'name': visible_name,
-                        }
-
-                        if not metadata:
-                            folders[target_hash]['subfolders'] = {}
-
-                    return folders[target_hash]
-
-                for existing_folder_hash, folder_data in folders.items():
-
-                    if existing_folder_hash == parent_hash:
-                        if target_hash not in folder_data['subfolders']:
-                            folder_data['subfolders'][target_hash] = {
-                                'name': visible_name,
-                            }
-                            if not metadata:
-                                folder_data['subfolders'][target_hash]['subfolders'] = {
-                                }
-
-                        return folder_data['subfolders'][target_hash]
-
-                    if 'subfolders' in folder_data:
-                        found_folder = find_or_create_folder(
-                            folder_data['subfolders'], target_hash, parent_hash, visible_name)
-                        if found_folder:
-                            return found_folder
-
-                return None
-
-            current_folder = find_or_create_folder(
-                folders, folder_hash, parent_hash, visible_name)
-
-            print(
-                f"Trying to find or create folder: {folder_hash} - parent hash: {parent_hash}")
-
-            if current_folder is None:
-                raise (
-                    f"Unable to find or create folder with hash: {folder_hash}")
-
-            # Add metadata or files to item/folder
-            if metadata:
-                current_folder['metadata'] = metadata
-                current_folder['files'] = {}
-
-                if files:
-                    current_folder['files'] = files
-
-                return True
-
-            return False
-
-        # First pass: Collect all folders and their relationships
+        # Iterate items / folders
         for i in range(1, len(obj_list)):
+
             obj_data = obj_list[i].split(':')
             obj_hash = obj_data[0]
             obj_folder_hash = obj_data[2]
+            
+            # print('[ Hash %s ] | [Folder hash %s]' % (obj_hash, obj_folder_hash))
 
             response = self._get_file_by_hash(obj_hash=obj_hash)
-            file_data = response.text.splitlines()
+            file_list = response.text.splitlines()
 
-            print(response.text)
-
-            # Files
+            # Get files
+            metadata = None
             files = []
-            current_item_key = ''
-            current_parent_key = ''
 
-            for j in range(1, len(file_data)):
-                obj_data = file_data[j].split(':')
-                obj_hash = obj_data[0]
-                obj_name = obj_data[2]
+            for j in range(1, len(file_list)):
+                file_data = file_list[j].split(':')
+                file_hash = file_data[0]
+                file_name = file_data[2]
 
-                print('Hash %s | %s | Folder hash %s' %
-                      (obj_hash, obj_name, obj_folder_hash))
+                # print('--- File Hash %s | Name "%s"' % (file_hash, file_name))
 
-                # Only process metadata if it's a metadata file
-                if '.metadata' in obj_name:
-                    response = self._get_file_by_hash(obj_hash=obj_hash)
-
+                # Process metadata file
+                if '.metadata' in file_name:
+                    response = self._get_file_by_hash(obj_hash=file_hash)
                     json_data = response.json()
-
-                    print(json_data)
 
                     if 'type' not in json_data:
                         continue
 
-                    # Handle folders (CollectionType)
-                    # Will look for a parent hash, if any
+                    metadata = json_data
+
                     if json_data['type'] == 'CollectionType':
-                        add_item_to_folder(
-                            folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash, visible_name=json_data['visibleName'])
-                        continue
+                        metadata['ID'] = obj_folder_hash
+                    else:
+                        metadata['ID'] = obj_hash
 
-                    # Regular document metadata processing
-                    current_item_key = json_data['visibleName']
-                    # Get the parent folder using hash
-                    current_parent_key = json_data['parent']
+                else:
 
-                # Collect file information
-                file_info = {
-                    'hash': obj_hash,
-                    'fileName': obj_name,
-                    'format': obj_name.split('.')[-1]
-                }
+                    # Collect file information
+                    file_info = {
+                        'hash': file_hash,
+                        'fileName': file_name,
+                        'format': file_name.split('.')[-1]
+                    }
 
-                files.append(file_info)
+                    files.append(file_info)
 
-            add_item_to_folder(folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash,
-                               visible_name=json_data['visibleName'], metadata=json_data, files=files)
+            if metadata:
+                metadata['files'] = files
+                collection.add(metadata)
 
-        return root
-        # return parse_entries(results, fail_method="warn")
+        return collection
