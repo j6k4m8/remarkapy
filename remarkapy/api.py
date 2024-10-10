@@ -33,6 +33,7 @@ class URLS:
     # https://eu.tectonic.remarkable.com/discovery/v1/endpoints
     AUTH_HOST = "https://webapp-prod.cloud.remarkable.engineering"
     REGISTER_DEVICE = f"{AUTH_HOST}/token/json/2/device/new"
+    REVOKE_DEVICE = f"{AUTH_HOST}/token/json/3/device/delete"
     NEW_USER_TOKEN = f"{AUTH_HOST}/token/json/2/user/new"
 
     # SYNC_URL = "https://internal.cloud.remarkable.com"
@@ -97,7 +98,7 @@ class Client:
             logger.error(f"Failed to write config file: {e}")
             raise e
 
-    def _post(self, url: str, data: dict, **kwargs) -> httpx.Response:
+    def _post(self, url: str, data: dict = None, **kwargs) -> httpx.Response:
         """
         Make a POST request to the reMarkable API.
 
@@ -121,7 +122,8 @@ class Client:
                 f"Device token has expired. Was the device unpaired?")
         elif response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when POSTing to {url}: {response.text}"
+                f"Request failed with status code {
+                    response.status_code} when POSTing to {url}: {response.text}"
             )
         return response
 
@@ -142,7 +144,8 @@ class Client:
         response = httpx.get(url, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when GETting from {url}: {response.text}"
+                f"Request failed with status code {
+                    response.status_code} when GETting from {url}: {response.text}"
             )
         return response
 
@@ -163,7 +166,8 @@ class Client:
         response = httpx.put(url, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when PUTting to {url}: {response.text}"
+                f"Request failed with status code {
+                    response.status_code} when PUTting to {url}: {response.text}"
             )
         return response
 
@@ -239,18 +243,16 @@ class Client:
     "lastOpenedPage": "{metadata['lastOpenedPage']}",
     "parent": "{metadata['parent']}",
     "pinned": {str(metadata['pinned']).lower()},
-    "type": "{metadata['type']}",
+    "type": "{metadata['Type']}",
     "visibleName": "{metadata['visibleName']}"
 }}
 '''
         return metadata_raw
 
-    def _put_file(self, _id: str, metadata):
-
-        metadata_raw = self._preparare_metadata(metadata)
+    def _put_file(self, _id: str, file_str: str):
 
         # Convert str to bytes
-        input_bytes = metadata_raw.encode('utf-8')
+        input_bytes = file_str.encode('utf-8')
 
         checksum = self._calculate_checksum(input_bytes)
 
@@ -262,22 +264,21 @@ class Client:
 
         url = URLS.GET_FILE + _id
 
-        return self._put(url, headers=headers, data=metadata_raw)
+        return self._put(url, headers=headers, data=file_str)
 
-    def rename_file(self, obj_id: str, new_name: str):
+    def rename_item(self, _id: str, new_name: str):
+        """
+        Renames an item
 
+        Arguments:
+            _id: ID of the item (document / folder)
+            new_name: the name you want to rename the item TO
+
+        Returns:
+            None
+
+        """
         self._get_root_folder()
-
-        # Should get file first and extract metadata
-        response = self._get_file_by_id(obj_id=obj_id)
-        metadata = response.json()
-
-        # Replace name without changing any other info
-        metadata['visibleName'] = new_name
-
-        self._put_file(obj_id, metadata)
-
-        # TODO re-attach metadata to content
 
     def _refresh_token(self):
         """
@@ -348,6 +349,35 @@ class Client:
             return True, "Device registered"
         else:
             return False, response.text
+
+    def delete_device(self):
+        """
+        Deletes the current device. Equivalent of a log out. 
+        The device token will be invalidated.
+
+        Arguments:
+            None
+
+        Returns:
+            Bool
+
+        Raises:
+            RemarkableAPIError: If the request fails.
+
+        """
+
+        headers = {
+            "Authorization": f"Bearer {self._config.devicetoken}",
+            "user-agent": "remarkapy",
+        }
+
+        url = URLS.REVOKE_DEVICE
+        response = self._post(url, headers=headers)
+
+        if response.status_code == 204:
+            return True
+
+        return False
 
     def register_device_wizard(self):
 
