@@ -8,8 +8,8 @@ import logging
 import pathlib
 import uuid
 import httpx
-
 from datetime import datetime
+import hashlib
 import crc32c
 import base64
 from .configfile import RemarkapyConfig, get_config_or_raise
@@ -171,12 +171,12 @@ class Client:
             )
         return response
 
-    def _sync_file(self, file_id: str):
+    def _sync_root(self, root_hash: str):
         """
-        Refresh the server side cached copy. This method should probably be called after any create, update or deletion of a file.
+        Push for a sync of root. This method should probably be called after any create, update or deletion of a file.
 
         Arguments:
-            file_id: id of the file you uploaded / modified
+            root_hash: hash of the updated root list
 
         Returns:
             None
@@ -185,7 +185,7 @@ class Client:
             RemarkableAPIError: 
         """
 
-        if len(file_id) != 64:
+        if len(root_hash) != 64:
             raise ValueError(f"Expected a 64 char ID/Hash")
 
         # Get current time in microseconds
@@ -195,7 +195,7 @@ class Client:
         data = {
             "broadcast": True,
             "generation": timestamp_ms,
-            "hash": file_id
+            "hash": root_hash
         }
 
         headers = {
@@ -205,7 +205,9 @@ class Client:
         }
 
         url = URLS.SYNC_FILE
-        self._put(url, headers=headers, json=data)
+
+        print(data)
+        return self._put(url, headers=headers, json=data)
 
     def _calculate_checksum(self, input_file: bytes):
 
@@ -249,12 +251,16 @@ class Client:
 '''
         return metadata_raw
 
-    def _put_file(self, _id: str, file_str: str):
+    def _put_file(self, file_content: str):
 
         # Convert str to bytes
-        input_bytes = file_str.encode('utf-8')
+        input_bytes = file_content.encode('utf-8')
 
+        # Calculate crc32c checksum
         checksum = self._calculate_checksum(input_bytes)
+
+        # Calculate sha256 hash
+        file_hash = hashlib.sha256(input_bytes).hexdigest()
 
         headers = {
             "Authorization": f"Bearer {self._config.usertoken}",
@@ -262,9 +268,34 @@ class Client:
             "x-goog-hash": f"crc32c={checksum}"
         }
 
-        url = URLS.GET_FILE + _id
+        url = URLS.GET_FILE + file_hash
 
-        return self._put(url, headers=headers, data=file_str)
+        res = self._put(url, headers=headers, data=file_content)
+
+        print(file_content)
+        return file_hash
+
+    def _replace_hash(self, item_file_list: str, search_for: str, new_hash: str):
+        """
+        Replaces a hash
+
+        Arguments:
+            item_file_list: String listing all the files included in an item (.content, .epub, .pagedata, .metadata, etc)
+            search_for: What the line must include the relevant hash to be replaced (eg. metadata)
+            new_hash: Hash that will be replaced with
+
+        Returns:
+            Updated string
+
+        """
+
+        lines = item_file_list.splitlines()
+
+        for i in range(len(lines)):
+            if search_for in lines[i]:
+                lines[i] = lines[i].replace(lines[i].split(":")[0], new_hash)
+
+        return "\n".join(lines)
 
     def rename_item(self, _id: str, new_name: str):
         """
@@ -278,7 +309,43 @@ class Client:
             None
 
         """
-        self._get_root_folder()
+
+        # Sync root
+        res = self._get_root_folder_hash()
+        print(res)
+        # Get item and extract current metadata
+        item = self.get_item_by_id(_id, include_raw=True)
+
+        metadata = item[0].to_dict()
+
+        metadata['visibleName'] = new_name
+        metadata_raw = self._preparare_metadata(metadata)
+
+        metadata_hash = self._put_file(metadata_raw)
+
+        # # Update item's file list with the updated metadata hash
+        file_list_raw = metadata['raw']
+
+        result = self._replace_hash(
+            file_list_raw, search_for='.metadata', new_hash=metadata_hash)
+
+        # Upload the new file
+        item_content_hash = self._put_file(result)
+
+        # Get root file list and add the new file
+        root_folder = self._get_root_folder()
+        root_folder = root_folder.text
+
+        result = self._replace_hash(
+            root_folder, search_for=_id, new_hash=item_content_hash)
+
+        # Sync updated root
+        root_hash = self._put_file(result)
+
+        print(root_hash)
+
+        # Sync root
+        print(self._sync_root(root_hash=root_hash))
 
     def _refresh_token(self):
         """
@@ -407,17 +474,24 @@ class Client:
         url = URLS.GET_FILE + obj_id
         return self._get(url, headers=headers)
 
-    def _get_root_folder(self):
+    def _get_root_folder_hash(self):
         headers = {
             "Authorization": f"Bearer {self._config.usertoken}",
             "user-agent": "remarkapy",
         }
 
         url = URLS.LIST_ROOT
-        return self._get(url, headers=headers)
+        response = self._get(url, headers=headers)
+        root_hash = response.json()['hash']
+
+        return root_hash
+
+    def _get_root_folder(self):
+        root_hash = self._get_root_folder_hash()
+        return self._get_file_by_id(obj_id=root_hash)
 
     # TODO Find a way to fetch folder_id or find a more elegant way to pass this argument
-    def get_item_by_id(self, _id: str, folder_id: str = "") -> Optional[DocumentOrFolder]:
+    def get_item_by_id(self, _id: str, folder_id: str = "", include_raw: bool = False) -> Optional[DocumentOrFolder]:
         """Get a meta item by ID
 
         Fetch an item from the Remarkable Cloud by ID.
@@ -454,8 +528,8 @@ class Client:
 
             # Process metadata file
             if '.metadata' in file_name:
-                response = self._get_file_by_id(obj_id=file_id)
-                json_data = response.json()
+                metadata_response = self._get_file_by_id(obj_id=file_id)
+                json_data = metadata_response.json()
 
                 if 'type' not in json_data:
                     continue
@@ -481,6 +555,9 @@ class Client:
         if metadata:
             metadata['files'] = files
 
+        if include_raw:
+            metadata['raw'] = response.text
+
         item = Collection()
         item.add(metadata)
 
@@ -505,11 +582,6 @@ class Client:
         """
 
         response = self._get_root_folder()
-
-        root_hash = response.json()['hash']
-
-        # print('Root hash -> ' + root_hash)
-        response = self._get_file_by_id(obj_id=root_hash)
         obj_list = response.text.splitlines()
 
         collection = Collection()

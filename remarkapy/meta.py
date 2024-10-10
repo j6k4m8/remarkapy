@@ -28,6 +28,7 @@ class Meta(object):
     lastOpenedPage = None
     pinned = None
     parent = ""
+    raw = ""
     files = []
 
     def __init__(self, **kwargs):
@@ -56,5 +57,6 @@ class Meta(object):
             "lastOpenedPage": self.lastOpenedPage,
             "pinned": self.pinned,
             "parent": self.parent,
-            "files": self.files
+            "files": self.files,
+            "raw": self.raw
         }
