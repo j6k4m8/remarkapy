@@ -252,7 +252,7 @@ class Client:
 '''
         return metadata_raw
 
-    def _put_file(self, file_content: str):
+    def _put_file(self, file_content: str, additional_headers:dict = {}):
 
         # Convert str to bytes
         input_bytes = file_content.encode('utf-8')
@@ -269,6 +269,7 @@ class Client:
             "x-goog-hash": f"crc32c={checksum}"
         }
 
+        headers = headers | additional_headers
         url = URLS.GET_FILE + file_hash
 
         res = self._put(url, headers=headers, data=file_content)
@@ -317,10 +318,20 @@ class Client:
 
         metadata = item[0].to_dict()
 
-        metadata['visibleName'] = new_name
+        # Find metadata's filename
+        metadata_file = [_file["fileName"] for _file in metadata["files"] if _file["format"] == "metadata"]
+        metadata_file = metadata_file[0].strip(".metadata")
+
+        # Replace with the new name
+        metadata["visibleName"] = new_name
         metadata_raw = self._preparare_metadata(metadata)
 
-        metadata_hash = self._put_file(metadata_raw)
+        # Add headers
+        additional_headers = {"rm-filename": f"{metadata_file}.metadata", "rm-parent-hash": _id}
+
+        # NOTE -> the final hash of this request mismatches. 
+        # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
+        metadata_hash = self._put_file(metadata_raw, additional_headers=additional_headers)
 
         # # Update item's file list with the updated metadata hash
         file_list_raw = metadata['raw']
@@ -329,7 +340,11 @@ class Client:
             file_list_raw, search_for='.metadata', new_hash=metadata_hash)
 
         # Upload the new file
-        item_content_hash = self._put_file(result)
+        additional_headers = {'rm-filename': f"{metadata_file}.docSchema"}
+
+        # NOTE -> the final hash of this request mismatches. 
+        # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
+        item_content_hash = self._put_file(result, additional_headers=additional_headers)
 
         # Get root file list and add the new file
         root_folder = self._get_root_folder()
@@ -339,7 +354,8 @@ class Client:
             root_folder, search_for=_id, new_hash=item_content_hash)
 
         # Sync updated root
-        root_hash = self._put_file(result)
+        additional_header = {'rm-filename': 'root.docSchema'}
+        root_hash = self._put_file(result, additional_headers=additional_headers)
 
         # Sync root
         print(self._sync_root(root_hash=root_hash))
@@ -520,6 +536,7 @@ class Client:
             file_data = file_list[i].split(':')
             file_id = file_data[0]
             file_name = file_data[2]
+            file_size = file_data[4]
 
             # print('--- File ID %s | Name "%s"' % (file_id, file_name))
 
@@ -538,16 +555,15 @@ class Client:
 
                 metadata['ID'] = _id
 
-            else:
+            # Collect file information
+            file_info = {
+                'id': file_id,
+                'fileName': file_name,
+                'format': file_name.split('.')[-1],
+                'size': file_size
+            }
 
-                # Collect file information
-                file_info = {
-                    'id': file_id,
-                    'fileName': file_name,
-                    'format': file_name.split('.')[-1]
-                }
-
-                files.append(file_info)
+            files.append(file_info)
 
         if metadata:
             metadata['files'] = files
