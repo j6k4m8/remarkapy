@@ -68,6 +68,8 @@ class Client:
         self._config, self._config_filepath = get_config_or_raise(
             configfile, return_path=True
         )
+
+        # TODO We should store the token instead of refreshing at every init
         self._refresh_token()
 
     def _dump_config(self):
@@ -206,7 +208,6 @@ class Client:
 
         url = URLS.SYNC_FILE
 
-        print(data)
         return self._put(url, headers=headers, json=data)
 
     def _calculate_checksum(self, input_file: bytes):
@@ -242,7 +243,7 @@ class Client:
     "createdTime": "{metadata['createdTime']}",
     "lastModified": "{metadata['lastModified']}",
     "lastOpened": "{metadata['lastOpened']}",
-    "lastOpenedPage": "{metadata['lastOpenedPage']}",
+    "lastOpenedPage": {metadata['lastOpenedPage']},
     "parent": "{metadata['parent']}",
     "pinned": {str(metadata['pinned']).lower()},
     "type": "{metadata['Type']}",
@@ -271,8 +272,6 @@ class Client:
         url = URLS.GET_FILE + file_hash
 
         res = self._put(url, headers=headers, data=file_content)
-
-        print(file_content)
         return file_hash
 
     def _replace_hash(self, item_file_list: str, search_for: str, new_hash: str):
@@ -312,7 +311,7 @@ class Client:
 
         # Sync root
         res = self._get_root_folder_hash()
-        print(res)
+
         # Get item and extract current metadata
         item = self.get_item_by_id(_id, include_raw=True)
 
@@ -341,8 +340,6 @@ class Client:
 
         # Sync updated root
         root_hash = self._put_file(result)
-
-        print(root_hash)
 
         # Sync root
         print(self._sync_root(root_hash=root_hash))
