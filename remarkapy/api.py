@@ -8,19 +8,23 @@ import logging
 import pathlib
 import uuid
 import httpx
-
+from datetime import datetime
+import hashlib
+import crc32c
+import base64
 from .configfile import RemarkapyConfig, get_config_or_raise
+from .collections import Collection
 from .entries import Entry, parse_entries
+from .exceptions import (RemarkableAPIError, ExpiredToken, DocumentNotFound)
+
+from .document import Document
+from .folder import Folder
+from typing import Union, Optional
 
 logger = logging.getLogger(__name__)
 
 
-class RemarkableAPIError(Exception):
-    ...
-
-
-class ExpiredToken(RemarkableAPIError):
-    ...
+DocumentOrFolder = Union[Document, Folder]
 
 
 class URLS:
@@ -29,12 +33,16 @@ class URLS:
     # https://eu.tectonic.remarkable.com/discovery/v1/endpoints
     AUTH_HOST = "https://webapp-prod.cloud.remarkable.engineering"
     REGISTER_DEVICE = f"{AUTH_HOST}/token/json/2/device/new"
+    REVOKE_DEVICE = f"{AUTH_HOST}/token/json/3/device/delete"
     NEW_USER_TOKEN = f"{AUTH_HOST}/token/json/2/user/new"
 
-    SYNC_URL = "https://internal.cloud.remarkable.com"
+    # SYNC_URL = "https://internal.cloud.remarkable.com"
     CLOUD_HOST = "https://eu.tectonic.remarkable.com"
     LIST_ROOT = f"{CLOUD_HOST}/sync/v4/root"
     GET_FILE = f"{CLOUD_HOST}/sync/v3/files/"
+
+    # SYNC
+    SYNC_FILE = f"{CLOUD_HOST}/sync/v3/root"
 
 
 class Client:
@@ -60,6 +68,8 @@ class Client:
         self._config, self._config_filepath = get_config_or_raise(
             configfile, return_path=True
         )
+
+        # TODO We should store the token instead of refreshing at every init
         self._refresh_token()
 
     def _dump_config(self):
@@ -90,7 +100,7 @@ class Client:
             logger.error(f"Failed to write config file: {e}")
             raise e
 
-    def _post(self, url: str, data: dict, **kwargs) -> httpx.Response:
+    def _post(self, url: str, data: dict = None, **kwargs) -> httpx.Response:
         """
         Make a POST request to the reMarkable API.
 
@@ -114,7 +124,8 @@ class Client:
                 f"Device token has expired. Was the device unpaired?")
         elif response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when POSTing to {url}: {response.text}"
+                f"Request failed with status code {
+                    response.status_code} when POSTing to {url}: {response.text}"
             )
         return response
 
@@ -135,9 +146,219 @@ class Client:
         response = httpx.get(url, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when GETting from {url}: {response.text}"
+                f"Request failed with status code {
+                    response.status_code} when GETting from {url}: {response.text}"
             )
         return response
+
+    def _put(self, url: str, **kwargs) -> httpx.Response:
+        """
+        Make a PUT request to the reMarkable API.
+
+        Arguments:
+            url: The URL to make the request to.
+
+        Returns:
+            The response from the server.
+
+        Raises:
+            RemarkableAPIError: If the request fails.
+
+        """
+        response = httpx.put(url, **kwargs)
+        if response.status_code != 200:
+            raise RemarkableAPIError(
+                f"Request failed with status code {
+                    response.status_code} when PUTting to {url}: {response.text}"
+            )
+        return response
+
+    def _sync_root(self, root_hash: str):
+        """
+        Push for a sync of root. This method should probably be called after any create, update or deletion of a file.
+
+        Arguments:
+            root_hash: hash of the updated root list
+
+        Returns:
+            None
+
+        Raises:
+            RemarkableAPIError: 
+        """
+
+        if len(root_hash) != 64:
+            raise ValueError(f"Expected a 64 char ID/Hash")
+
+        # Get current time in microseconds
+        now = datetime.now()
+        timestamp_ms = int(now.timestamp() * 1_000_000)
+
+        data = {
+            "broadcast": True,
+            "generation": timestamp_ms,
+            "hash": root_hash
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+            "rm-filename": "roothash",
+        }
+
+        url = URLS.SYNC_FILE
+
+        return self._put(url, headers=headers, json=data)
+
+    def _calculate_checksum(self, input_file: bytes):
+
+        # Calculate CRC32C checksum
+        crc32c_checksum = crc32c.crc32c(input_file)
+
+        # Convert to base64
+        crc32c_bytes = crc32c_checksum.to_bytes(4, byteorder='big')
+        crc32c_base64 = base64.b64encode(crc32c_bytes).decode('utf-8')
+
+        # print(f"CRC32C Checksum (Base64): {crc32c_base64}")
+
+        return crc32c_base64
+
+    def _preparare_metadata(self, metadata: dict):
+        """
+
+        Arguments:
+            metadata : dict
+
+        Returns:
+            A formatted metadata string that can be CRCd with _calculate_checksum()
+
+        Raises:
+            None
+
+        """
+
+        # trying this approach to maintain indentation. Otherwise CRC would mismatch
+        # TODO find a better solution?
+        metadata_raw = f'''{{
+    "createdTime": "{metadata['createdTime']}",
+    "lastModified": "{metadata['lastModified']}",
+    "lastOpened": "{metadata['lastOpened']}",
+    "lastOpenedPage": {metadata['lastOpenedPage']},
+    "parent": "{metadata['parent']}",
+    "pinned": {str(metadata['pinned']).lower()},
+    "type": "{metadata['Type']}",
+    "visibleName": "{metadata['visibleName']}"
+}}
+'''
+        return metadata_raw
+
+    def _put_file(self, file_content: str, additional_headers:dict = {}):
+
+        # Convert str to bytes
+        input_bytes = file_content.encode('utf-8')
+
+        # Calculate crc32c checksum
+        checksum = self._calculate_checksum(input_bytes)
+
+        # Calculate sha256 hash
+        file_hash = hashlib.sha256(input_bytes).hexdigest()
+
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+            "x-goog-hash": f"crc32c={checksum}"
+        }
+
+        headers = headers | additional_headers
+        url = URLS.GET_FILE + file_hash
+
+        res = self._put(url, headers=headers, data=file_content)
+        return file_hash
+
+    def _replace_hash(self, item_file_list: str, search_for: str, new_hash: str):
+        """
+        Replaces a hash
+
+        Arguments:
+            item_file_list: String listing all the files included in an item (.content, .epub, .pagedata, .metadata, etc)
+            search_for: What the line must include the relevant hash to be replaced (eg. metadata)
+            new_hash: Hash that will be replaced with
+
+        Returns:
+            Updated string
+
+        """
+
+        lines = item_file_list.splitlines()
+
+        for i in range(len(lines)):
+            if search_for in lines[i]:
+                lines[i] = lines[i].replace(lines[i].split(":")[0], new_hash)
+
+        return "\n".join(lines)
+
+    def rename_item(self, _id: str, new_name: str):
+        """
+        Renames an item
+
+        Arguments:
+            _id: ID of the item (document / folder)
+            new_name: the name you want to rename the item TO
+
+        Returns:
+            None
+
+        """
+
+        # Sync root
+        res = self._get_root_folder_hash()
+
+        # Get item and extract current metadata
+        item = self.get_item_by_id(_id, include_raw=True)
+
+        metadata = item[0].to_dict()
+
+        # Find metadata's filename
+        metadata_file = [_file["fileName"] for _file in metadata["files"] if _file["format"] == "metadata"]
+        metadata_file = metadata_file[0].strip(".metadata")
+
+        # Replace with the new name
+        metadata["visibleName"] = new_name
+        metadata_raw = self._preparare_metadata(metadata)
+
+        # Add headers
+        additional_headers = {"rm-filename": f"{metadata_file}.metadata", "rm-parent-hash": _id}
+
+        # NOTE -> the final hash of this request mismatches. 
+        # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
+        metadata_hash = self._put_file(metadata_raw, additional_headers=additional_headers)
+
+        # # Update item's file list with the updated metadata hash
+        file_list_raw = metadata['raw']
+
+        result = self._replace_hash(
+            file_list_raw, search_for='.metadata', new_hash=metadata_hash)
+
+        # Upload the new file
+        additional_headers = {'rm-filename': f"{metadata_file}.docSchema"}
+
+        # NOTE -> the final hash of this request mismatches. 
+        # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
+        item_content_hash = self._put_file(result, additional_headers=additional_headers)
+
+        # Get root file list and add the new file
+        root_folder = self._get_root_folder()
+        root_folder = root_folder.text
+
+        result = self._replace_hash(
+            root_folder, search_for=_id, new_hash=item_content_hash)
+
+        # Sync updated root
+        additional_header = {'rm-filename': 'root.docSchema'}
+        root_hash = self._put_file(result, additional_headers=additional_headers)
+
+        # Sync root
+        print(self._sync_root(root_hash=root_hash))
 
     def _refresh_token(self):
         """
@@ -209,6 +430,35 @@ class Client:
         else:
             return False, response.text
 
+    def delete_device(self):
+        """
+        Deletes the current device. Equivalent of a log out. 
+        The device token will be invalidated.
+
+        Arguments:
+            None
+
+        Returns:
+            Bool
+
+        Raises:
+            RemarkableAPIError: If the request fails.
+
+        """
+
+        headers = {
+            "Authorization": f"Bearer {self._config.devicetoken}",
+            "user-agent": "remarkapy",
+        }
+
+        url = URLS.REVOKE_DEVICE
+        response = self._post(url, headers=headers)
+
+        if response.status_code == 204:
+            return True
+
+        return False
+
     def register_device_wizard(self):
 
         print('\n=== REMARKABLE CLOUD ===')
@@ -227,9 +477,108 @@ class Client:
 
         print(msg)
 
-    def list_documents(self) -> list[Entry]:
+    def _get_file_by_id(self, obj_id: str):
+
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+        }
+
+        url = URLS.GET_FILE + obj_id
+        return self._get(url, headers=headers)
+
+    def _get_root_folder_hash(self):
+        headers = {
+            "Authorization": f"Bearer {self._config.usertoken}",
+            "user-agent": "remarkapy",
+        }
+
+        url = URLS.LIST_ROOT
+        response = self._get(url, headers=headers)
+        root_hash = response.json()['hash']
+
+        return root_hash
+
+    def _get_root_folder(self):
+        root_hash = self._get_root_folder_hash()
+        return self._get_file_by_id(obj_id=root_hash)
+
+    # TODO Find a way to fetch folder_id or find a more elegant way to pass this argument
+    def get_item_by_id(self, _id: str, folder_id: str = "", include_raw: bool = False) -> Optional[DocumentOrFolder]:
+        """Get a meta item by ID
+
+        Fetch an item from the Remarkable Cloud by ID.
+
+        Args:
+            _id: The id of the item.
+
+        Optional Args:
+            folder_id: folder ID is not contained in the metadata
+
+        Returns:
+            A Document or Folder instance of the requested ID.
+        Raises:
+            DocumentNotFound: When a document cannot be found.
         """
-        List all documents in the user's account.
+
+        response = self._get_file_by_id(obj_id=_id)
+
+        if response.status_code != 200:
+            raise DocumentNotFound(f"Could not find document {_id}")
+
+        # Files contained in the item
+        file_list = response.text.splitlines()
+
+        metadata = None
+        files = []
+
+        for i in range(1, len(file_list)):
+            file_data = file_list[i].split(':')
+            file_id = file_data[0]
+            file_name = file_data[2]
+            file_size = file_data[4]
+
+            # print('--- File ID %s | Name "%s"' % (file_id, file_name))
+
+            # Process metadata file
+            if '.metadata' in file_name:
+                metadata_response = self._get_file_by_id(obj_id=file_id)
+                json_data = metadata_response.json()
+
+                if 'type' not in json_data:
+                    continue
+
+                metadata = json_data
+
+                if folder_id:
+                    metadata['folderID'] = folder_id
+
+                metadata['ID'] = _id
+
+            # Collect file information
+            file_info = {
+                'id': file_id,
+                'fileName': file_name,
+                'format': file_name.split('.')[-1],
+                'size': file_size
+            }
+
+            files.append(file_info)
+
+        if metadata:
+            metadata['files'] = files
+
+        if include_raw:
+            metadata['raw'] = response.text
+
+        item = Collection()
+        item.add(metadata)
+
+        return item
+
+    def get_items(self) -> Collection:
+        """
+        Get all documents in the user's cloud.
 
         This method will make a request to the reMarkable API to retrieve
         a list of documents.
@@ -245,156 +594,20 @@ class Client:
 
         """
 
-        url = URLS.LIST_ROOT
-        headers = {
-            "Authorization": f"Bearer {self._config.usertoken}",
-            "user-agent": "remarkapy",
-        }
-
-        response = self._get(url, headers=headers)
-        if not response.status_code == 200:
-            raise RemarkableAPIError(
-                f"Request failed with status code {response.status_code} when listing documents: {response.text}"
-            )
-
-        # NOTE we could store this hash somewhere as it probably changes only
-        # when a folder/file gets created/modified (if we decide to cache some data)
-        root_hash = response.json()['hash']
-
-        # List doc hashes on root folder
-        url = URLS.GET_FILE + root_hash
-        response = self._get(url, headers=headers)
+        response = self._get_root_folder()
         obj_list = response.text.splitlines()
 
-        root = {}
+        collection = Collection()
 
-        # Add a file or a folder to a specific parent_hash or to root
-        def add_item_to_folder(folders, folder_hash: str, parent_hash: str = "", visible_name: str = "", metadata: dict = None, files: list = None):
-
-            # Trash is a special folder which doesn''t have a specific hash, just "trash"
-            if parent_hash == "trash":
-
-                if "trash" not in folders:
-                    folders["trash"] = {
-                        "visibleName": "Trash",
-                        "subfolders": {},
-                        "docs": {}
-                    }
-
-            # Recursively find or create a folder
-            def find_or_create_folder(folders, target_hash, parent_hash, visible_name):
-                # If no parent, add at root level
-                if not parent_hash:
-                    if target_hash not in folders:
-                        folders[target_hash] = {
-                            'name': visible_name,
-                        }
-
-                        if not metadata:
-                            folders[target_hash]['subfolders'] = {}
-
-                    return folders[target_hash]
-
-                for existing_folder_hash, folder_data in folders.items():
-
-                    if existing_folder_hash == parent_hash:
-                        if target_hash not in folder_data['subfolders']:
-                            folder_data['subfolders'][target_hash] = {
-                                'name': visible_name,
-                            }
-                            if not metadata:
-                                folder_data['subfolders'][target_hash]['subfolders'] = {
-                                }
-
-                        return folder_data['subfolders'][target_hash]
-
-                    if 'subfolders' in folder_data:
-                        found_folder = find_or_create_folder(
-                            folder_data['subfolders'], target_hash, parent_hash, visible_name)
-                        if found_folder:
-                            return found_folder
-
-                return None
-
-            current_folder = find_or_create_folder(
-                folders, folder_hash, parent_hash, visible_name)
-
-            print(
-                f"Trying to find or create folder: {folder_hash} - parent hash: {parent_hash}")
-
-            if current_folder is None:
-                raise (
-                    f"Unable to find or create folder with hash: {folder_hash}")
-
-            # Add metadata or files to item/folder
-            if metadata:
-                current_folder['metadata'] = metadata
-                current_folder['files'] = {}
-
-                if files:
-                    current_folder['files'] = files
-
-                return True
-
-            return False
-
-        # First pass: Collect all folders and their relationships
+        # Iterate items / folders
         for i in range(1, len(obj_list)):
+
             obj_data = obj_list[i].split(':')
-            obj_hash = obj_data[0]
-            obj_folder_hash = obj_data[2]
+            obj_id = obj_data[0]
+            obj_folder_id = obj_data[2]
 
-            url = URLS.GET_FILE + obj_hash
-            response = self._get(url, headers=headers)
+            # print('[ ID %s ] | [Folder ID %s]' % (obj_id, obj_folder_id))
+            item = self.get_item_by_id(obj_id, folder_id=obj_folder_id)
+            collection.items.extend(item)
 
-            file_data = response.text.splitlines()
-
-            # Files
-            files = []
-            current_item_key = ''
-            current_parent_key = ''
-
-            for j in range(1, len(file_data)):
-                obj_data = file_data[j].split(':')
-                obj_hash = obj_data[0]
-                obj_name = obj_data[2]
-
-                print('Hash %s | ****%s | Folder hash %s' %
-                      (obj_hash, obj_name[-25:], obj_folder_hash))
-
-                # Only process metadata if it's a metadata file
-                if '.metadata' in obj_name:
-                    url = URLS.GET_FILE + obj_hash
-                    response = self._get(url, headers=headers)
-
-                    json_data = response.json()
-
-                    if 'type' not in json_data:
-                        continue
-
-                    # Handle folders (CollectionType)
-                    # Will look for a parent hash, if any
-                    if json_data['type'] == 'CollectionType':
-                        add_item_to_folder(
-                            folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash, visible_name=json_data['visibleName'])
-                        continue
-
-                    # Regular document metadata processing
-                    current_item_key = json_data['visibleName']
-                    # Get the parent folder using hash
-                    current_parent_key = json_data['parent']
-
-                # Collect file information
-                file_info = {
-                    'hash': obj_hash,
-                    'fileName': obj_name,
-                    'format': obj_name.split('.')[-1]
-                }
-
-                files.append(file_info)
-
-            add_item_to_folder(folders=root, parent_hash=json_data['parent'], folder_hash=obj_folder_hash,
-                               visible_name=json_data['visibleName'], metadata=json_data, files=files)
-
-        return root
-        # return parse_entries(results, fail_method="warn")
+        return collection
