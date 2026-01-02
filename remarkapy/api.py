@@ -362,7 +362,7 @@ class Client:
         # Add headers
         additional_headers = {"rm-filename": f"{metadata_file}.metadata", "rm-parent-hash": _id}
 
-        # NOTE -> the final hash of this request mismatches. 
+        # NOTE -> the final hash of this request mismatches.
         # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
         metadata_hash = self._put_file(metadata_raw, additional_headers=additional_headers)
 
@@ -380,7 +380,7 @@ class Client:
         additional_headers = {'rm-filename': f"{metadata_file}.docSchema"}
         item_schema_size = len(result.encode("utf-8"))
 
-        # NOTE -> the final hash of this request mismatches. 
+        # NOTE -> the final hash of this request mismatches.
         # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
         item_content_hash = self._put_file(result, additional_headers=additional_headers)
 
@@ -618,22 +618,21 @@ class Client:
 
         return item
 
-    def get_items(self) -> Collection:
+    def get_items(self, folder_id: str = None) -> Collection:
         """
-        Get all documents in the user's cloud.
+        Get all items in the user's cloud.
 
         This method will make a request to the reMarkable API to retrieve
-        a list of documents.
+        a list of items.
 
         Arguments:
-            None
+            folder_id: The ID of the folder to retrieve items from.
+                If None, retrieves from the root folder.
 
         Returns:
-            A list of documents.
-
+            A Collection of items.
         Raises:
             RemarkableAPIError: If the request fails.
-
         """
 
         response = self._get_root_folder()
@@ -652,4 +651,50 @@ class Client:
             item = self.get_item_by_id(obj_id, folder_id=obj_folder_id)
             collection.items.extend(item)
 
+        if folder_id is not None:
+            # Filter items by folder ID
+            collection.items = [
+                item for item in collection.items if item.folder_id == folder_id
+            ]
+
         return collection
+
+    def get_item_ids(self, folder_id: str = None) -> list[str]:
+        """
+        Get all document IDs in the user's cloud.
+
+        This method will make a request to the reMarkable API to retrieve
+        a list of document IDs.
+
+        Arguments:
+            folder_id: The ID of the folder to retrieve documents from.
+                If None, retrieves from the root folder.
+
+        Returns:
+            A list of document IDs.
+
+        Raises:
+            RemarkableAPIError: If the request fails.
+
+        """
+
+        response = self._get_root_folder()
+        obj_list = response.text.splitlines()
+
+        # collection = Collection()
+        results = []
+
+        # Iterate items / folders
+        for i in range(1, len(obj_list)):
+
+            obj_data = obj_list[i].split(':')
+            obj_id = obj_data[0]
+            obj_folder_id = obj_data[2]
+
+            # print('[ ID %s ] | [Folder ID %s]' % (obj_id, obj_folder_id))
+            # item = self.get_item_by_id(obj_id, folder_id=obj_folder_id)
+            # collection.items.extend(item)
+            if folder_id is None or folder_id == obj_folder_id:
+                results.append(obj_id)
+
+        return results
