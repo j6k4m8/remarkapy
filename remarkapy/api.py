@@ -124,8 +124,7 @@ class Client:
                 f"Device token has expired. Was the device unpaired?")
         elif response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {
-                    response.status_code} when POSTing to {url}: {response.text}"
+                f"Request failed with status code {response.status_code} when POSTing to {url}: {response.text}"
             )
         return response
 
@@ -146,8 +145,7 @@ class Client:
         response = httpx.get(url, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {
-                    response.status_code} when GETting from {url}: {response.text}"
+                f"Request failed with status code {response.status_code} when GETting from {url}: {response.text}"
             )
         return response
 
@@ -168,8 +166,7 @@ class Client:
         response = httpx.put(url, **kwargs)
         if response.status_code != 200:
             raise RemarkableAPIError(
-                f"Request failed with status code {
-                    response.status_code} when PUTting to {url}: {response.text}"
+                f"Request failed with status code {response.status_code} when PUTting to {url}: {response.text}"
             )
         return response
 
