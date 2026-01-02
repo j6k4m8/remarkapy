@@ -21,3 +21,8 @@ dev-dependencies = [
     "pytest>=8.3.3",
     "ruff>=0.6.5",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests that hit the reMarkable API",
+]

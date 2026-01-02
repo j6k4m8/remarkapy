@@ -45,3 +45,19 @@ This is my attempt to make a simple, easy-to-use Python package for interacting 
 -   [ ] Syncing to a local directory
 -   [ ] Syncing from a local directory
 -   [ ] Device registration from a short code
+
+## Setup
+
+```bash
+uv run remarkapy
+```
+
+This will prompt for a device verification code:
+
+```
+=== REMARKABLE CLOUD ===
+Please visit https://my.remarkable.com/pair/app and enter the code shown
+Verification code: abcdefgh
+Device registered
+Saved tokens to /Users/$USER/.rmapi
+```

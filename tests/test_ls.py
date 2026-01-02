@@ -1,25 +1,18 @@
-import sys
-sys.path.insert(0, '../')
-from remarkapy.api import Client
 import json
 
-api = Client()
+import pytest
+
+from remarkapy.api import Client
+
+pytestmark = pytest.mark.integration
 
 
-# Specify the file path
-file_path = 'output.json'
+def test_list_documents_smoke(tmp_path):
+    api = Client()
+    collection = api.get_items()
+    docs = [doc.to_dict() for doc in collection]
 
-# Fetch a collection of metadata items
-collection = api.get_items()
+    file_path = tmp_path / "output.json"
+    file_path.write_text(json.dumps(docs, indent=4), encoding="utf-8")
 
-# Convert the first document in the collection to a dictionary
-docs = []
-for doc in collection:
-    docs.append(doc.to_dict())
-
-# Dump the dictionary to a JSON file
-with open(file_path, 'w') as json_file:
-    json.dump(docs, json_file, indent=4)
-
-print(f"Data has been saved to {file_path}.")
-#
+    assert file_path.exists()

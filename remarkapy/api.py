@@ -294,6 +294,41 @@ class Client:
 
         return "\n".join(lines)
 
+    def _replace_hash_and_size(
+        self,
+        item_file_list: str,
+        search_for: str,
+        new_hash: str,
+        new_size: int | None = None,
+    ):
+        """
+        Replaces a hash and optionally updates the size field.
+
+        Arguments:
+            item_file_list: String listing all the files included in an item (.content, .epub, .pagedata, .metadata, etc)
+            search_for: What the line must include the relevant hash to be replaced (eg. metadata)
+            new_hash: Hash that will be replaced with
+            new_size: Size to replace with, in bytes (optional)
+
+        Returns:
+            Updated string
+
+        """
+
+        lines = item_file_list.splitlines()
+
+        for i in range(len(lines)):
+            if search_for in lines[i]:
+                parts = lines[i].split(":")
+                if not parts:
+                    continue
+                parts[0] = new_hash
+                if new_size is not None and len(parts) > 4:
+                    parts[4] = str(new_size)
+                lines[i] = ":".join(parts)
+
+        return "\n".join(lines)
+
     def rename_item(self, _id: str, new_name: str):
         """
         Renames an item
@@ -322,24 +357,30 @@ class Client:
         # Replace with the new name
         metadata["visibleName"] = new_name
         metadata_raw = self._preparare_metadata(metadata)
+        metadata_size = len(metadata_raw.encode("utf-8"))
 
         # Add headers
         additional_headers = {"rm-filename": f"{metadata_file}.metadata", "rm-parent-hash": _id}
 
-        # NOTE -> the final hash of this request mismatches.
+        # NOTE -> the final hash of this request mismatches. 
         # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
         metadata_hash = self._put_file(metadata_raw, additional_headers=additional_headers)
 
         # # Update item's file list with the updated metadata hash
         file_list_raw = metadata['raw']
 
-        result = self._replace_hash(
-            file_list_raw, search_for='.metadata', new_hash=metadata_hash)
+        result = self._replace_hash_and_size(
+            file_list_raw,
+            search_for=".metadata",
+            new_hash=metadata_hash,
+            new_size=metadata_size,
+        )
 
         # Upload the new file
         additional_headers = {'rm-filename': f"{metadata_file}.docSchema"}
+        item_schema_size = len(result.encode("utf-8"))
 
-        # NOTE -> the final hash of this request mismatches.
+        # NOTE -> the final hash of this request mismatches. 
         # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
         item_content_hash = self._put_file(result, additional_headers=additional_headers)
 
@@ -347,8 +388,12 @@ class Client:
         root_folder = self._get_root_folder()
         root_folder = root_folder.text
 
-        result = self._replace_hash(
-            root_folder, search_for=_id, new_hash=item_content_hash)
+        result = self._replace_hash_and_size(
+            root_folder,
+            search_for=_id,
+            new_hash=item_content_hash,
+            new_size=item_schema_size,
+        )
 
         # Sync updated root
         additional_headers = {'rm-filename': 'root.docSchema'}
