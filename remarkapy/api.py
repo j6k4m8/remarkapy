@@ -184,7 +184,7 @@ class Client:
             None
 
         Raises:
-            RemarkableAPIError: 
+            RemarkableAPIError:
         """
 
         if len(root_hash) != 64:
@@ -329,7 +329,7 @@ class Client:
         # Add headers
         additional_headers = {"rm-filename": f"{metadata_file}.metadata", "rm-parent-hash": _id}
 
-        # NOTE -> the final hash of this request mismatches. 
+        # NOTE -> the final hash of this request mismatches.
         # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
         metadata_hash = self._put_file(metadata_raw, additional_headers=additional_headers)
 
@@ -342,7 +342,7 @@ class Client:
         # Upload the new file
         additional_headers = {'rm-filename': f"{metadata_file}.docSchema"}
 
-        # NOTE -> the final hash of this request mismatches. 
+        # NOTE -> the final hash of this request mismatches.
         # Maybe it's calculated based on the hash of the folder (all files contained in the item?)
         item_content_hash = self._put_file(result, additional_headers=additional_headers)
 
@@ -354,7 +354,7 @@ class Client:
             root_folder, search_for=_id, new_hash=item_content_hash)
 
         # Sync updated root
-        additional_header = {'rm-filename': 'root.docSchema'}
+        additional_headers = {'rm-filename': 'root.docSchema'}
         root_hash = self._put_file(result, additional_headers=additional_headers)
 
         # Sync root
@@ -432,7 +432,7 @@ class Client:
 
     def delete_device(self):
         """
-        Deletes the current device. Equivalent of a log out. 
+        Deletes the current device. Equivalent of a log out.
         The device token will be invalidated.
 
         Arguments:
