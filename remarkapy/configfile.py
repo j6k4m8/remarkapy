@@ -1,116 +1,150 @@
-"""
-This module contains the logic to read the configuration file and return the values as a dictionary.
-The file can be in multiple places, based upon the user's previously used SDKs.
+"""Helpers for locating and parsing reMarkable token config files."""
 
-For example, rmapi uses the following order to find the configuration file:
-
-    1. ~/.rmapi
-    2. $CONFIG_DIR/rmapi/.rmapi
-    3. $CONFIG_DIR/rmapi/rmapi.conf
-
-In any case, the configuration file is a simple key-value pair file, with keys,
-
-    1. devicetoken
-    2. usertoken
-
-The values are the actual tokens that are used to authenticate the user with the reMarkable cloud.
-In general, these start with `ey` in my experience (though this code does not check for that).
-
-"""
+from __future__ import annotations
 
 import os
 import pathlib
-import pydantic
+from dataclasses import dataclass
+
+from .exceptions import ConfigNotFoundError
 
 
-class RemarkapyConfig(pydantic.BaseModel):
-    usertoken: str
-    devicetoken: str
+@dataclass(slots=True)
+class RemarkapyConfig:
+    """Stored authentication tokens for the reMarkable cloud.
+
+    Attributes:
+        usertoken: The short-lived user/session token.
+        devicetoken: The long-lived device token.
+    """
+
+    usertoken: str = ""
+    devicetoken: str = ""
+
+
+DEFAULT_CONFIG_PATH = pathlib.Path.home() / ".rmapi"
+
+
+def candidate_config_paths() -> list[pathlib.Path]:
+    """Return config locations compatible with existing rmapi setups.
+
+    Returns:
+        A prioritized list of candidate config paths.
+    """
+    rmapi_config = os.environ.get("RMAPI_CONFIG")
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+
+    return [
+        pathlib.Path.home() / ".rmapi",
+        pathlib.Path(rmapi_config).expanduser() / ".rmapi"
+        if rmapi_config
+        else pathlib.Path("~").expanduser() / ".rmapi",
+        pathlib.Path(rmapi_config).expanduser() / ".rmapi.conf"
+        if rmapi_config
+        else pathlib.Path("~").expanduser() / ".rmapi.conf",
+        pathlib.Path(rmapi_config).expanduser() / "rmapi" / ".rmapi"
+        if rmapi_config
+        else pathlib.Path("~/.config").expanduser() / "rmapi" / ".rmapi",
+        pathlib.Path(rmapi_config).expanduser() / "rmapi" / "rmapi.conf"
+        if rmapi_config
+        else pathlib.Path("~/.config").expanduser() / "rmapi" / "rmapi.conf",
+        pathlib.Path(xdg_config).expanduser() / "rmapi" / ".rmapi"
+        if xdg_config
+        else pathlib.Path("~/.config").expanduser() / "rmapi" / ".rmapi",
+        pathlib.Path("~/Library/Application Support").expanduser() / "rmapi" / ".rmapi",
+        pathlib.Path("~/Library/Application Support").expanduser() / "rmapi" / "rmapi.conf",
+    ]
+
+
+def _parse_config_file(config_path: pathlib.Path) -> RemarkapyConfig:
+    """Parse an rmapi-compatible config file.
+
+    Args:
+        config_path: The file to parse.
+
+    Returns:
+        A parsed config object.
+    """
+    config = RemarkapyConfig()
+    with config_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            if key == "usertoken":
+                config.usertoken = value
+            elif key == "devicetoken":
+                config.devicetoken = value
+    return config
+
+
+def resolve_config_path(
+    config_path_override: pathlib.Path | str | None = None,
+) -> pathlib.Path:
+    """Resolve the config path to use.
+
+    Args:
+        config_path_override: An explicit override path.
+
+    Returns:
+        The resolved config path, even if it does not yet exist.
+    """
+    if config_path_override is not None:
+        return pathlib.Path(config_path_override).expanduser().resolve()
+
+    for option in candidate_config_paths():
+        resolved = option.expanduser().resolve()
+        if resolved.exists():
+            return resolved
+
+    return DEFAULT_CONFIG_PATH.expanduser().resolve()
 
 
 def get_config_or_raise(
-    config_path_override: pathlib.Path | str | None = None, return_path: bool = False
+    config_path_override: pathlib.Path | str | None = None,
+    return_path: bool = False,
+    allow_missing: bool = False,
 ) -> RemarkapyConfig | tuple[RemarkapyConfig, pathlib.Path]:
-    """
-    This function attempts to find the configuration file in the user's home directory, or in the
-    $CONFIG_DIR directory. If the file is not found, it raises a FileNotFoundError.
-    The XDG_CONFIG_HOME environment variable is used to determine the location of the configuration
-    file based upon the rmapi SDK. On Mac, this is "~/Library/Application Support/rmapi".
+    """Load the token config from disk.
 
-    Arguments:
-        config_path_override (pathlib.Path | str | None): The path to the configuration file, if it
-            is not in one of the default locations.
-        return_path (bool): If True, the function will return a tuple with the configuration and the
-            path to the configuration file. If False, it will only return the configuration.
+    Args:
+        config_path_override: An explicit override path.
+        return_path: Whether to return the resolved path alongside the config.
+        allow_missing: Whether to allow a missing file and return empty tokens.
 
     Returns:
-        RemarkapyConfig: A pydantic model with the usertoken and devicetoken.
-        tuple[RemarkapyConfig, pathlib.Path]: If return_path is True, a tuple with the configuration
-            and the path to the configuration file.
+        A config object, optionally with the resolved path.
 
     Raises:
-        FileNotFoundError: If the configuration file is not found.
-
+        ConfigNotFoundError: If no readable config file exists and missing files
+            are not allowed.
     """
-
-    config_path = ""
-
-    if config_path_override is not None:
-        config_path = pathlib.Path(config_path_override)
-
+    config_path = resolve_config_path(config_path_override)
+    if config_path.exists():
+        config = _parse_config_file(config_path)
+    elif allow_missing:
+        config = RemarkapyConfig()
     else:
-        options = [
-            pathlib.Path.home() / ".rmapi",
-            pathlib.Path(os.environ.get("RMAPI_CONFIG", "~")) / ".rmapi",
-            pathlib.Path(os.environ.get("RMAPI_CONFIG", "~")) / ".rmapi.conf",
-            pathlib.Path(os.environ.get("RMAPI_CONFIG", "~/.config"))
-            / "rmapi"
-            / ".rmapi",
-            pathlib.Path(os.environ.get("RMAPI_CONFIG", "~/.config"))
-            / "rmapi"
-            / "rmapi.conf",
-            pathlib.Path(os.environ.get("XDG_CONFIG_HOME", "~/.config"))
-            / "rmapi"
-            / ".rmapi",
-            pathlib.Path(
-                os.environ.get("XDG_CONFIG_HOME", "~/Library/Application Support")
-            )
-            / "rmapi"
-            / ".rmapi",
-            pathlib.Path(
-                os.environ.get("XDG_CONFIG_HOME", "~/Library/Application Support")
-            )
-            / "rmapi"
-            / "rmapi.conf",
-        ]
-        for option in options:
-            option = pathlib.Path(option).expanduser().resolve()
-            if option.exists():
-                config_path = option
-                break
-
-    config = {"usertoken": "", "devicetoken": ""}
-
-    if config_path:
-        with open(config_path, "r") as f:
-            for line in f:
-                if line.strip().startswith("#"):
-                    continue
-                line_parts = line.strip().split(":", 1)
-                if len(line_parts) != 2:
-                    continue
-                key, value = line_parts
-                config[key.strip()] = value.strip()
-    else:
-        config_path = pathlib.Path.home() / ".rmapi"
+        raise ConfigNotFoundError(
+            f"Could not find a reMarkable config file at {config_path}"
+        )
 
     if return_path:
-        return (
-            RemarkapyConfig(
-                usertoken=config["usertoken"], devicetoken=config["devicetoken"]
-            ),
-            config_path,
-        )
-    return RemarkapyConfig(
-        usertoken=config["usertoken"], devicetoken=config["devicetoken"]
-    )
+        return config, config_path
+    return config
+
+
+def write_config(config_path: pathlib.Path, config: RemarkapyConfig) -> None:
+    """Write an rmapi-compatible config file.
+
+    Args:
+        config_path: The destination config path.
+        config: The config values to write.
+    """
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w", encoding="utf-8") as handle:
+        handle.write(f"devicetoken: {config.devicetoken}\n")
+        handle.write(f"usertoken: {config.usertoken}\n")
