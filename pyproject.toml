@@ -1,19 +1,31 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "remarkapy"
 version = "0.1.0"
-description = "Add your description here"
+description = "Library-first Python client for the reMarkable cloud API"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "crc32c>=2.7.1",
     "httpx>=0.27.2",
     "pydantic>=2.9.1",
     "pydantic-settings>=2.5.2",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[project.scripts]
+remarkapy = "remarkapy.cli:main"
+rkpy = "remarkapy.cli:main"
+
+[tool.setuptools]
+packages = ["remarkapy"]
+
+[dependency-groups]
+dev = [
     "ipykernel>=6.29.5",
-    "pytest-watch>=4.2.0",
     "pytest>=8.3.3",
+    "pytest-watch>=4.2.0",
     "ruff>=0.6.5",
 ]
