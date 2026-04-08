@@ -42,5 +42,13 @@ class AmbiguousItemError(RemarkableAPIError):
     """Raised when a human-friendly item reference matches multiple items."""
 
 
+class ExportBackendUnavailableError(RemarkableAPIError):
+    """Raised when an optional export backend is not installed."""
+
+
+class ExportFailedError(RemarkableAPIError):
+    """Raised when an optional export backend fails to render output."""
+
+
 class DocumentNotFound(HashNotFoundError):
     """Backward-compatible alias for a missing document or item."""

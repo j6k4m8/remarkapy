@@ -435,6 +435,41 @@ class Client(AuthenticatedClient):
         payload = self._get_original_payload(item_ref, file_type)
         return self._write_download(payload, output_path, visible_name)
 
+    def export_item(
+        self,
+        item_ref: str,
+        output_dir: pathlib.Path | str,
+        *,
+        backend: str = "remarks",
+        format: str = "pdf",
+        executable: str = "remarks",
+        device: str | None = None,
+    ):
+        """Export one item through an optional external renderer.
+
+        Args:
+            item_ref: Item name, path, id, or hash.
+            output_dir: Directory where exported files should be copied.
+            backend: Export backend name. Currently only ``remarks`` is supported.
+            format: Requested export format.
+            executable: Command name or path for the external backend.
+            device: Optional device override forwarded to the backend.
+
+        Returns:
+            An export result describing the copied files.
+        """
+        from .export import export_item_with_backend
+
+        return export_item_with_backend(
+            self,
+            item_ref,
+            output_dir,
+            backend=backend,
+            format=format,
+            executable=executable,
+            device=device,
+        )
+
     def _build_entry(self, simple_entry: SimpleEntry) -> Entry:
         """Hydrate a public item entry from its manifest and metadata."""
         _, manifest = self._load_item_manifest(simple_entry.hash, exact=True)

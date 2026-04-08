@@ -11,6 +11,7 @@ from .entries import (
     SimpleEntry,
     TemplateEntry,
 )
+from .export import ExportResult
 from .exceptions import (
     ConfigNotFoundError,
     DocumentNotFound,
@@ -26,6 +27,7 @@ __all__ = [
     "CollectionEntry",
     "ConfigNotFoundError",
     "DocumentEntry",
+    "ExportResult",
     "DocumentNotFound",
     "EndpointSet",
     "EntriesManifest",

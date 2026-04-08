@@ -42,7 +42,7 @@ def _normalize_output(value: Any) -> Any:
         A JSON-serializable representation.
     """
     if is_dataclass(value):
-        return asdict(value)
+        return _normalize_output(asdict(value))
     if isinstance(value, pathlib.Path):
         return {"path": str(value)}
     if isinstance(value, list):
@@ -107,6 +107,36 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Download mode. Defaults to auto.",
     )
     get_parser.set_defaults(handler=_cmd_get)
+
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Export annotations through an external `remarks` backend.",
+        parents=[common],
+    )
+    export_parser.add_argument("item_ref", help="Item name, library path, id, or current hash.")
+    export_parser.add_argument("output", help="Destination directory for exported files.")
+    export_parser.add_argument(
+        "--backend",
+        choices=["remarks"],
+        default="remarks",
+        help="External export backend. Defaults to remarks.",
+    )
+    export_parser.add_argument(
+        "--format",
+        choices=["pdf", "md", "svg", "png", "all"],
+        default="pdf",
+        help="Export format to collect from the backend.",
+    )
+    export_parser.add_argument(
+        "--remarks-cmd",
+        default="remarks",
+        help="Command name or path for the external remarks executable.",
+    )
+    export_parser.add_argument(
+        "--device",
+        help="Optional device override forwarded to the remarks backend.",
+    )
+    export_parser.set_defaults(handler=_cmd_export)
 
     info_parser = subparsers.add_parser(
         "info",
@@ -316,6 +346,21 @@ def _cmd_get(args: argparse.Namespace) -> int:
             args.item_ref,
             args.output,
             format=args.format,
+        ),
+    )
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    """Handle `export`."""
+    return _run_with_client(
+        args,
+        lambda client: client.export_item(
+            args.item_ref,
+            args.output,
+            backend=args.backend,
+            format=args.format,
+            executable=args.remarks_cmd,
+            device=args.device,
         ),
     )
 
