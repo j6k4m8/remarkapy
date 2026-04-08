@@ -7,6 +7,7 @@ import pathlib
 from dataclasses import dataclass
 
 import remarkapy.cli as cli
+from remarkapy.export import ExportResult
 
 
 @dataclass
@@ -68,6 +69,24 @@ class FakeClient:
         if format == "bundle" or "Notebook" in item_ref:
             return pathlib.Path("output.zip")
         return pathlib.Path("output.pdf")
+
+    def export_item(
+        self,
+        item_ref: str,
+        output: str,
+        *,
+        backend: str = "remarks",
+        format: str = "pdf",
+        executable: str = "remarks",
+        device: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append(("export_item", item_ref, output, backend, format, executable, device))
+        return {
+            "backend": backend,
+            "format": format,
+            "output_dir": pathlib.Path(output),
+            "files": [pathlib.Path(output) / f"exported.{format if format != 'all' else 'pdf'}"],
+        }
 
     def download_original_file(self, item_ref: str, output: str | None) -> pathlib.Path:
         self.calls.append(("download_original_file", item_ref, output))
@@ -197,6 +216,60 @@ def test_get_supports_output_path_and_format(monkeypatch, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["path"] == "file.zip"
 
+
+
+def test_export_dispatches_to_external_backend(monkeypatch, capsys) -> None:
+    """`export` should forward backend options to the client adapter."""
+    holder: dict[str, FakeClient] = {}
+    _install_fake_client(monkeypatch, holder)
+
+    exit_code = cli.main(
+        [
+            "export",
+            "Meeting Notes",
+            "exports",
+            "--format",
+            "md",
+            "--remarks-cmd",
+            "./bin/remarks",
+            "--device",
+            "reMarkable2",
+        ]
+    )
+
+    assert exit_code == 0
+    assert holder["client"].calls[0] == (
+        "export_item",
+        "Meeting Notes",
+        "exports",
+        "remarks",
+        "md",
+        "./bin/remarks",
+        "reMarkable2",
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["backend"] == "remarks"
+    assert payload["format"] == "md"
+    assert payload["output_dir"] == {"path": "exports"}
+
+
+def test_normalize_output_recurses_into_dataclass_paths() -> None:
+    """Dataclass results should recursively normalize nested path values."""
+    result = ExportResult(
+        backend="remarks",
+        format="pdf",
+        output_dir=pathlib.Path("exports"),
+        files=[pathlib.Path("exports/out.pdf")],
+    )
+
+    payload = cli._normalize_output(result)
+
+    assert payload == {
+        "backend": "remarks",
+        "format": "pdf",
+        "output_dir": {"path": "exports"},
+        "files": [{"path": "exports/out.pdf"}],
+    }
 
 
 def test_info_outputs_one_item(monkeypatch, capsys) -> None:

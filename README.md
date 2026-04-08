@@ -44,6 +44,7 @@ uv run rkpy ls -r Papers/
 uv run rkpy get Papers/Example.pdf
 uv run rkpy get Papers/Example.pdf --output ./Example.pdf
 uv run rkpy get "Meeting Notes" --format bundle
+uv run rkpy export "Meeting Notes" ./exports --format pdf
 uv run rkpy info Papers/Example.pdf
 uv run remarkapy get-id <item-id-or-hash>
 uv run rkpy put-pdf ./example.pdf --parent Papers/
@@ -68,6 +69,15 @@ API churn.
 -   supporting the current immutable-manifest sync protocol,
 -   exposing a clean Python library API first,
 -   keeping real integration tests available behind an explicit opt-in flag.
+
+## Optional export backends
+
+-   `remarkapy` does not render annotations itself.
+-   `uv sync` installs the preferred `avncharlie/remarks` fork automatically as the `remarks` command.
+-   `rkpy export` shells out to that installed `remarks` executable by default, but `--remarks-cmd` still lets you override it.
+-   For single-file PDF/Markdown exports, you can pass an exact output file path like `./notes.pdf`; otherwise pass an output directory.
+-   `remarks` needs the system Cairo library for PDF rendering; on macOS install it with `brew install cairo`.
+-   Export output is staged in a temporary bundle and copied back into your requested output directory.
 
 ## Features
 

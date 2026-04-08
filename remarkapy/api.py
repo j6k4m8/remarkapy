@@ -2,6 +2,7 @@
 
 from .client import Client
 from .configfile import RemarkapyConfig, get_config_or_raise, resolve_config_path, write_config
+from .export import ExportResult
 from .endpoints import EndpointSet, URLS
 from .exceptions import (
     ConfigNotFoundError,
@@ -17,6 +18,7 @@ __all__ = [
     "Client",
     "ConfigNotFoundError",
     "DocumentNotFound",
+    "ExportResult",
     "EndpointSet",
     "ExpiredToken",
     "GenerationError",
