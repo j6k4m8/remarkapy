@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "remarkapy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Library-first Python client for the reMarkable cloud API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,7 +13,6 @@ dependencies = [
     "httpx>=0.27.2",
     "pydantic>=2.9.1",
     "pydantic-settings>=2.5.2",
-    "remarks @ git+https://github.com/avncharlie/remarks.git",
 ]
 
 [project.scripts]

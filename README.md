@@ -73,7 +73,7 @@ API churn.
 ## Optional export backends
 
 -   `remarkapy` does not render annotations itself.
--   `uv sync` installs the preferred `avncharlie/remarks` fork automatically as the `remarks` command.
+-   Install the `remarks` command separately if you want export support (for example: `uv tool install git+https://github.com/avncharlie/remarks.git`).
 -   `rkpy export` shells out to that installed `remarks` executable by default, but `--remarks-cmd` still lets you override it.
 -   For single-file PDF/Markdown exports, you can pass an exact output file path like `./notes.pdf`; otherwise pass an output directory.
 -   `remarks` needs the system Cairo library for PDF rendering; on macOS install it with `brew install cairo`.
