@@ -33,11 +33,12 @@ class FakeItem:
 class FakeRemarkableCloud:
     """A tiny in-memory reMarkable cloud for unit tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, blob_put_status_code: int = 200) -> None:
         self.device_token = "device-token"
         self.user_token = "user-token"
         self.generation = 100
         self.schema_version = 3
+        self.blob_put_status_code = blob_put_status_code
         self.storage: dict[str, bytes] = {}
         self.hash_names: dict[str, str] = {}
         self.root_entries: list[RawEntry] = []
@@ -277,7 +278,7 @@ class FakeRemarkableCloud:
             hash_value = path.rsplit("/", 1)[-1]
             payload = request.content
             self.storage[hash_value] = payload
-            return self._text("ok")
+            return self._text("ok", status_code=self.blob_put_status_code)
 
         if request.method == "PUT" and path == "/sync/v3/root":
             payload = json.loads(request.content.decode("utf-8"))
@@ -474,6 +475,19 @@ def test_move_and_delete_update_parent() -> None:
 def test_put_folder_and_put_pdf_create_new_items() -> None:
     """Folder and PDF creation should append new items to the root manifest."""
     cloud = FakeRemarkableCloud()
+    client = make_client(cloud)
+
+    folder = client.put_folder("Inbox")
+    document = client.put_pdf("Hello.pdf", b"%PDF-1.4\nhello\n", parent=folder.id, refresh=True)
+    items = client.list_items(refresh=True)
+
+    assert any(item.visibleName == "Inbox" and item.id == folder.id for item in items)
+    assert any(item.visibleName == "Hello.pdf" and item.id == document.id for item in items)
+
+
+def test_put_folder_and_put_pdf_accept_blob_upload_202() -> None:
+    """Low-level immutable uploads should tolerate `202 Accepted` blob writes."""
+    cloud = FakeRemarkableCloud(blob_put_status_code=202)
     client = make_client(cloud)
 
     folder = client.put_folder("Inbox")

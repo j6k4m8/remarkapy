@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.1 - 2026-04-24
+
+### Fixed
+
+- Accepted `202 Accepted` as a successful response for immutable blob uploads on `PUT /sync/v3/files/{hash}`.
+- Fixed `Client.put_pdf()` and `Client.put_folder()` on live backends that acknowledge blob writes with HTTP 202.
+
 ## 0.2.0 - 2026-04-24
 
 ### Changed

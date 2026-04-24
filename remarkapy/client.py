@@ -554,6 +554,7 @@ class Client(AuthenticatedClient):
                 }
             ),
             content=payload,
+            expected_statuses=(200, 202),
             retry_on_unauthorized=True,
         )
 
