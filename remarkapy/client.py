@@ -10,7 +10,6 @@ import json
 import pathlib
 import uuid
 import zipfile
-from dataclasses import dataclass
 from time import time
 from typing import Any
 
@@ -24,6 +23,7 @@ from .entries import (
     DocumentEntry,
     EntriesManifest,
     Entry,
+    IndexedItem,
     RawEntry,
     SimpleEntry,
     TemplateEntry,
@@ -39,22 +39,6 @@ from .exceptions import AmbiguousItemError, DocumentNotFound, HashNotFoundError
 ROOT_SPECIAL_ID = "root"
 ROOT_PARENT_ID = ""
 TRASH_PARENT_ID = "trash"
-
-
-@dataclass(slots=True)
-class IndexedItem:
-    """Lightweight library index entry used for fast path resolution and listing."""
-
-    id: str
-    hash: str
-    visible_name: str
-    parent: str
-    item_type: str
-
-    @property
-    def is_collection(self) -> bool:
-        """Return whether the indexed item is a folder."""
-        return self.item_type == "CollectionType"
 
 
 class Client(AuthenticatedClient):
@@ -117,7 +101,7 @@ class Client(AuthenticatedClient):
     def _entry_label(self, entry: IndexedItem) -> str:
         """Return the display label for one entry in a directory listing."""
         suffix = "/" if entry.is_collection else ""
-        return f"{entry.visible_name}{suffix}"
+        return f"{entry.visibleName}{suffix}"
 
     def _require_child_entry(
         self, manifest: EntriesManifest, suffix: str, item_ref: str
@@ -136,9 +120,9 @@ class Client(AuthenticatedClient):
         return IndexedItem(
             id=entry.id,
             hash=entry.hash,
-            visible_name=metadata["visibleName"],
+            type=metadata["type"],
+            visibleName=metadata["visibleName"],
             parent=metadata.get("parent", ROOT_PARENT_ID),
-            item_type=metadata["type"],
         )
 
     def _indexed_items(self, refresh: bool = False) -> list[IndexedItem]:
@@ -163,7 +147,7 @@ class Client(AuthenticatedClient):
         items = self._indexed_items(refresh=refresh)
         return sorted(
             [item for item in items if item.parent == parent_id],
-            key=lambda item: (item.visible_name.lower(), item.id),
+            key=lambda item: (item.visibleName.lower(), item.id),
         )
 
     def _resolve_directory_id(self, directory_ref: str, refresh: bool = False) -> str:
@@ -175,8 +159,15 @@ class Client(AuthenticatedClient):
             raise DocumentNotFound(f"Directory reference must point to a folder: {directory_ref}")
         return entry.id
 
-    def list_directory(self, directory_ref: str = "", refresh: bool = False) -> list[Entry]:
-        """List the direct children of one library directory."""
+    def list_directory(self, directory_ref: str = "", refresh: bool = False) -> list[IndexedItem]:
+        """List the direct children of one library directory as lightweight items."""
+        parent_id = self._resolve_directory_id(directory_ref, refresh=refresh)
+        return self._children_of(parent_id, refresh=refresh)
+
+    def list_directory_hydrated(
+        self, directory_ref: str = "", refresh: bool = False
+    ) -> list[Entry]:
+        """List the direct children of one library directory as hydrated items."""
         parent_id = self._resolve_directory_id(directory_ref, refresh=refresh)
         return [
             self._build_entry(SimpleEntry(id=entry.id, hash=entry.hash))
@@ -234,11 +225,11 @@ class Client(AuthenticatedClient):
         self, item_ref: str, refresh: bool = False
     ) -> IndexedItem:
         """Resolve an item reference by unique visible name."""
-        matches = [item for item in self._indexed_items(refresh=refresh) if item.visible_name == item_ref]
+        matches = [item for item in self._indexed_items(refresh=refresh) if item.visibleName == item_ref]
         if not matches:
             raise DocumentNotFound(f"Could not resolve item reference: {item_ref}")
         if len(matches) > 1:
-            matches_text = ", ".join(sorted(f"{item.visible_name} ({item.id})" for item in matches))
+            matches_text = ", ".join(sorted(f"{item.visibleName} ({item.id})" for item in matches))
             raise AmbiguousItemError(
                 f"Reference '{item_ref}' matched multiple items: {matches_text}. Use a path like Folder/Name or `get-id`."
             )
@@ -255,7 +246,7 @@ class Client(AuthenticatedClient):
         parent = ROOT_PARENT_ID
         current = None
         for segment in segments:
-            matches = [item for item in items if item.parent == parent and item.visible_name == segment]
+            matches = [item for item in items if item.parent == parent and item.visibleName == segment]
             if not matches:
                 raise DocumentNotFound(f"Could not resolve item path: {item_ref}")
             if len(matches) > 1:
@@ -511,15 +502,24 @@ class Client(AuthenticatedClient):
             tags=tag_names,
         )
 
-    def list_items(self, refresh: bool = False) -> list[Entry]:
-        """List all folders and documents in the cloud library."""
+    def list_items(self, refresh: bool = False) -> list[IndexedItem]:
+        """List lightweight library items for cheap scans and lookups.
+
+        This fetches each item's manifest and metadata, but skips `.content`
+        hydration. Use `list_hydrated_items()` when you need the richer
+        hydrated `Entry` objects.
+        """
+        return list(self._indexed_items(refresh=refresh))
+
+    def list_hydrated_items(self, refresh: bool = False) -> list[Entry]:
+        """Hydrate all folders and documents in the cloud library."""
         return [self._build_entry(entry) for entry in self.list_ids(refresh=refresh)]
 
-    def list_documents(self, refresh: bool = False) -> list[Entry]:
+    def list_documents(self, refresh: bool = False) -> list[IndexedItem]:
         """Backward-compatible alias for `list_items`."""
         return self.list_items(refresh=refresh)
 
-    def get_items(self, refresh: bool = False) -> list[Entry]:
+    def get_items(self, refresh: bool = False) -> list[IndexedItem]:
         """Backward-compatible alias for `list_items`."""
         return self.list_items(refresh=refresh)
 
@@ -883,4 +883,4 @@ class Client(AuthenticatedClient):
         return self.upload_file_simple(visible_name, b"", "folder")
 
 
-__all__ = ["Client", "ROOT_PARENT_ID", "ROOT_SPECIAL_ID", "TRASH_PARENT_ID"]
+__all__ = ["Client", "IndexedItem", "ROOT_PARENT_ID", "ROOT_SPECIAL_ID", "TRASH_PARENT_ID"]

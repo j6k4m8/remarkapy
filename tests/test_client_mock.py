@@ -39,7 +39,9 @@ class FakeRemarkableCloud:
         self.generation = 100
         self.schema_version = 3
         self.storage: dict[str, bytes] = {}
+        self.hash_names: dict[str, str] = {}
         self.root_entries: list[RawEntry] = []
+        self.requested_blob_ids: list[str] = []
         self.last_simple_upload: dict[str, Any] | None = None
 
         self.folder = self._create_folder("Papers", parent="", item_id="11111111-1111-4111-8111-111111111111")
@@ -57,6 +59,7 @@ class FakeRemarkableCloud:
     def _store_blob(self, file_name: str, payload: bytes) -> RawEntry:
         hash_value = self._sha256(payload)
         self.storage[hash_value] = payload
+        self.hash_names[hash_value] = file_name
         return RawEntry(id=file_name, hash=hash_value, type=0, subfiles=0, size=len(payload))
 
     def _manifest_payload(self, manifest_id: str, entries: list[RawEntry]) -> bytes:
@@ -76,6 +79,7 @@ class FakeRemarkableCloud:
         payload = self._manifest_payload(manifest_id, entries)
         hash_value = self._manifest_hash(entries)
         self.storage[hash_value] = payload
+        self.hash_names[hash_value] = f"{manifest_id}.docSchema"
         return RawEntry(
             id=manifest_id,
             hash=hash_value,
@@ -266,6 +270,7 @@ class FakeRemarkableCloud:
             payload = self.storage.get(hash_value)
             if payload is None:
                 return self._text("missing", status_code=404)
+            self.requested_blob_ids.append(self.hash_names.get(hash_value, hash_value))
             return httpx.Response(200, content=payload)
 
         if request.method == "PUT" and path.startswith("/sync/v3/files/"):
@@ -304,8 +309,8 @@ def make_client(cloud: FakeRemarkableCloud) -> Client:
     return Client(device_token=cloud.device_token, http_client=http_client, persist_config=False)
 
 
-def test_list_items_returns_documents_and_collections() -> None:
-    """The client should parse both folder and document entries."""
+def test_list_items_returns_lightweight_documents_and_collections() -> None:
+    """The lightweight list should expose folder and document summaries."""
     cloud = FakeRemarkableCloud()
     client = make_client(cloud)
 
@@ -314,6 +319,31 @@ def test_list_items_returns_documents_and_collections() -> None:
     assert len(items) == 2
     assert {item.type for item in items} == {"CollectionType", "DocumentType"}
     assert {item.visibleName for item in items} == {"Papers", "Example.pdf"}
+    assert not any(name.endswith(".content") for name in cloud.requested_blob_ids)
+
+
+def test_list_hydrated_items_fetches_content() -> None:
+    """The explicit hydrated list should fetch per-item `.content` blobs."""
+    cloud = FakeRemarkableCloud()
+    client = make_client(cloud)
+
+    items = client.list_hydrated_items()
+
+    assert len(items) == 2
+    assert {item.type for item in items} == {"CollectionType", "DocumentType"}
+    assert {item.visibleName for item in items} == {"Papers", "Example.pdf"}
+    assert any(name.endswith(".content") for name in cloud.requested_blob_ids)
+
+
+def test_list_directory_returns_lightweight_children() -> None:
+    """Directory listings should be lightweight by default."""
+    cloud = FakeRemarkableCloud()
+    client = make_client(cloud)
+
+    items = client.list_directory("Papers/")
+
+    assert [item.visibleName for item in items] == ["Example.pdf"]
+    assert not any(name.endswith(".content") for name in cloud.requested_blob_ids)
 
 
 def test_list_directory_paths_root_and_folder() -> None:

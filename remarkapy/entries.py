@@ -41,6 +41,22 @@ class SimpleEntry:
     hash: str
 
 
+@dataclass(slots=True, frozen=True)
+class IndexedItem:
+    """A lightweight library index entry for fast listings and lookups."""
+
+    id: str
+    hash: str
+    type: Literal["CollectionType", "DocumentType", "TemplateType"]
+    visibleName: str
+    parent: str
+
+    @property
+    def is_collection(self) -> bool:
+        """Return whether the indexed item is a folder."""
+        return self.type == "CollectionType"
+
+
 @dataclass(slots=True)
 class CollectionEntry:
     """A folder/collection entry visible in the user library."""
@@ -250,6 +266,7 @@ __all__ = [
     "DocumentEntry",
     "EntriesManifest",
     "Entry",
+    "IndexedItem",
     "RawEntry",
     "SimpleEntry",
     "TemplateEntry",

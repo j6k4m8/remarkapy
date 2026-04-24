@@ -10,8 +10,12 @@ from remarkapy import Client
 client = Client()
 items = client.list_items()
 for item in items[:5]:
-    print(item.type, item.visibleName, item.id, item.hash)
+    print(item.type, item.visibleName, item.parent, item.id, item.hash)
 ```
+
+Use `client.list_items()` for cheap library scans and lookup workflows.
+`client.list_hydrated_items()` is the explicit full-hydration variant and
+fetches each item's manifest, metadata, and `.content` blob.
 
 Download a raw bundle:
 

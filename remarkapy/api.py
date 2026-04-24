@@ -2,6 +2,7 @@
 
 from .client import Client
 from .configfile import RemarkapyConfig, get_config_or_raise, resolve_config_path, write_config
+from .entries import IndexedItem
 from .export import ExportResult
 from .endpoints import EndpointSet, URLS
 from .exceptions import (
@@ -23,6 +24,7 @@ __all__ = [
     "ExpiredToken",
     "GenerationError",
     "HashNotFoundError",
+    "IndexedItem",
     "RemarkableAPIError",
     "RemarkapyConfig",
     "ResponseError",

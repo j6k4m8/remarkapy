@@ -7,7 +7,7 @@ from dataclasses import dataclass
 DEFAULT_DISCOVERY_HOST = "https://eu.tectonic.remarkable.com"
 DEFAULT_WEBAPP_HOST = "https://webapp-prod.cloud.remarkable.engineering"
 DEFAULT_UPLOAD_HOST = "https://internal.cloud.remarkable.com"
-DEFAULT_USER_AGENT = "remarkapy/0.1.1"
+DEFAULT_USER_AGENT = "remarkapy/0.2.0"
 
 
 @dataclass(slots=True)
