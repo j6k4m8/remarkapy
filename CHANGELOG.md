@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.2 - 2026-05-27
+
+### Fixed
+
+- Sent `rm-filename` on blob reads with the stored filename so `GET /sync/v3/files/{hash}` works against the current cloud validation.
+- Accepted `201 Created` as a successful response for browser-style uploads on `POST /doc/v2/files`.
+
 ## 0.2.1 - 2026-04-24
 
 ### Fixed
