@@ -33,16 +33,23 @@ class FakeItem:
 class FakeRemarkableCloud:
     """A tiny in-memory reMarkable cloud for unit tests."""
 
-    def __init__(self, *, blob_put_status_code: int = 200) -> None:
+    def __init__(
+        self,
+        *,
+        blob_put_status_code: int = 200,
+        simple_upload_status_code: int = 200,
+    ) -> None:
         self.device_token = "device-token"
         self.user_token = "user-token"
         self.generation = 100
         self.schema_version = 3
         self.blob_put_status_code = blob_put_status_code
+        self.simple_upload_status_code = simple_upload_status_code
         self.storage: dict[str, bytes] = {}
         self.hash_names: dict[str, str] = {}
         self.root_entries: list[RawEntry] = []
         self.requested_blob_ids: list[str] = []
+        self.requested_blob_headers: list[str] = []
         self.last_simple_upload: dict[str, Any] | None = None
 
         self.folder = self._create_folder("Papers", parent="", item_id="11111111-1111-4111-8111-111111111111")
@@ -271,6 +278,14 @@ class FakeRemarkableCloud:
             payload = self.storage.get(hash_value)
             if payload is None:
                 return self._text("missing", status_code=404)
+            expected_name = self.hash_names.get(hash_value)
+            requested_name = request.headers.get("rm-filename", "")
+            if expected_name is not None and requested_name != expected_name:
+                return self._text(
+                    '{"message":"unexpected \'rm-filename\' http header"}',
+                    status_code=400,
+                )
+            self.requested_blob_headers.append(requested_name)
             self.requested_blob_ids.append(self.hash_names.get(hash_value, hash_value))
             return httpx.Response(200, content=payload)
 
@@ -298,7 +313,10 @@ class FakeRemarkableCloud:
                 created = self._create_document(visible_name, parent="", payload=request.content)
             self._refresh_root()
             self.last_simple_upload = {"name": visible_name, "mime_type": mime_type}
-            return self._json({"docID": created.item_id, "hash": created.item_hash})
+            return self._json(
+                {"docID": created.item_id, "hash": created.item_hash},
+                status_code=self.simple_upload_status_code,
+            )
 
         raise AssertionError(f"Unhandled request: {request.method} {request.url}")
 
@@ -321,6 +339,20 @@ def test_list_items_returns_lightweight_documents_and_collections() -> None:
     assert {item.type for item in items} == {"CollectionType", "DocumentType"}
     assert {item.visibleName for item in items} == {"Papers", "Example.pdf"}
     assert not any(name.endswith(".content") for name in cloud.requested_blob_ids)
+
+
+def test_list_items_reads_manifests_and_metadata_with_blob_filenames() -> None:
+    """Blob reads should include the stored filename expected by the server."""
+    cloud = FakeRemarkableCloud()
+    client = make_client(cloud)
+
+    client.list_items()
+
+    assert "root.docSchema" in cloud.requested_blob_headers
+    assert f"{cloud.folder.item_id}.docSchema" in cloud.requested_blob_headers
+    assert f"{cloud.folder.item_id}.metadata" in cloud.requested_blob_headers
+    assert f"{cloud.document.item_id}.docSchema" in cloud.requested_blob_headers
+    assert f"{cloud.document.item_id}.metadata" in cloud.requested_blob_headers
 
 
 def test_list_hydrated_items_fetches_content() -> None:
@@ -517,6 +549,18 @@ def test_download_raw_bundle_contains_all_manifest_files(tmp_path: pathlib.Path)
 def test_simple_upload_pdf_uses_browser_endpoint() -> None:
     """Simple uploads should call the browser-style upload endpoint."""
     cloud = FakeRemarkableCloud()
+    client = make_client(cloud)
+
+    created = client.upload_pdf("Browser.pdf", b"%PDF-1.4\nfrom browser\n")
+    items = client.list_items(refresh=True)
+
+    assert cloud.last_simple_upload == {"name": "Browser.pdf", "mime_type": "application/pdf"}
+    assert any(item.id == created.id for item in items)
+
+
+def test_simple_upload_pdf_accepts_http_201() -> None:
+    """Simple uploads should tolerate `201 Created` responses."""
+    cloud = FakeRemarkableCloud(simple_upload_status_code=201)
     client = make_client(cloud)
 
     created = client.upload_pdf("Browser.pdf", b"%PDF-1.4\nfrom browser\n")

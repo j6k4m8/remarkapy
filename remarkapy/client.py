@@ -44,19 +44,23 @@ TRASH_PARENT_ID = "trash"
 class Client(AuthenticatedClient):
     """A synchronous Python client for the reMarkable cloud API."""
 
-    def _get_hash_bytes(self, hash_value: str) -> bytes:
+    def _manifest_file_name(self, manifest_id: str) -> str:
+        """Return the blob filename used for one manifest read."""
+        return f"{manifest_id}.docSchema"
+
+    def _get_hash_bytes(self, hash_value: str, *, file_name: str | None = None) -> bytes:
         """Fetch raw blob bytes by hash."""
         response = self._request(
             "GET",
             f"{self.urls.files_root}/{hash_value}",
-            headers=self._user_headers(),
+            headers=self._user_headers({"rm-filename": file_name} if file_name else None),
             retry_on_unauthorized=True,
         )
         return response.content
 
-    def _get_hash_text(self, hash_value: str) -> str:
+    def _get_hash_text(self, hash_value: str, *, file_name: str | None = None) -> str:
         """Fetch text content by hash."""
-        return self._get_hash_bytes(hash_value).decode("utf-8")
+        return self._get_hash_bytes(hash_value, file_name=file_name).decode("utf-8")
 
     def get_root_state(self, refresh: bool = False) -> tuple[str, int, int]:
         """Return the current root hash, generation, and schema version."""
@@ -77,16 +81,21 @@ class Client(AuthenticatedClient):
         )
         return self._root_state
 
-    def get_entries(self, hash_value: str) -> EntriesManifest:
+    def get_entries(
+        self, hash_value: str, *, manifest_id: str | None = None
+    ) -> EntriesManifest:
         """Return the parsed manifest for an item or the root."""
-        return parse_entries_manifest(self._get_hash_text(hash_value))
+        if manifest_id is None and self._root_state is not None and hash_value == self._root_state[0]:
+            manifest_id = ROOT_SPECIAL_ID
+        file_name = self._manifest_file_name(manifest_id or hash_value)
+        return parse_entries_manifest(self._get_hash_text(hash_value, file_name=file_name))
 
     def _get_root_entries(
         self, refresh: bool = False
     ) -> tuple[str, int, int, list[RawEntry]]:
         """Fetch the current root entry list and metadata."""
         root_hash, generation, schema_version = self.get_root_state(refresh=refresh)
-        manifest = self.get_entries(root_hash)
+        manifest = self.get_entries(root_hash, manifest_id=ROOT_SPECIAL_ID)
         return root_hash, generation, schema_version, list(manifest.entries)
 
     def list_ids(self, refresh: bool = False) -> list[SimpleEntry]:
@@ -114,9 +123,11 @@ class Client(AuthenticatedClient):
 
     def _build_indexed_item(self, entry: RawEntry) -> IndexedItem:
         """Load the minimal metadata needed for path resolution and directory listings."""
-        manifest = self.get_entries(entry.hash)
+        manifest = self.get_entries(entry.hash, manifest_id=entry.id)
         metadata_entry = self._require_child_entry(manifest, ".metadata", entry.id)
-        metadata = json.loads(self._get_hash_text(metadata_entry.hash))
+        metadata = json.loads(
+            self._get_hash_text(metadata_entry.hash, file_name=metadata_entry.id)
+        )
         return IndexedItem(
             id=entry.id,
             hash=entry.hash,
@@ -295,7 +306,7 @@ class Client(AuthenticatedClient):
         """Resolve and fetch an item's manifest."""
         entry = self._resolve_indexed_item(item_ref, refresh=refresh, exact=exact)
         simple_entry = SimpleEntry(id=entry.id, hash=entry.hash)
-        return simple_entry, self.get_entries(simple_entry.hash)
+        return simple_entry, self.get_entries(simple_entry.hash, manifest_id=simple_entry.id)
 
     def _find_child_entry(
         self, manifest: EntriesManifest, suffix: str
@@ -307,13 +318,13 @@ class Client(AuthenticatedClient):
         """Fetch and decode a JSON child entry."""
         _, manifest = self._load_item_manifest(item_ref)
         child = self._require_child_entry(manifest, suffix, item_ref)
-        return json.loads(self._get_hash_text(child.hash))
+        return json.loads(self._get_hash_text(child.hash, file_name=child.id))
 
     def _get_binary_child(self, item_ref: str, suffix: str) -> bytes:
         """Fetch a binary child entry."""
         _, manifest = self._load_item_manifest(item_ref)
         child = self._require_child_entry(manifest, suffix, item_ref)
-        return self._get_hash_bytes(child.hash)
+        return self._get_hash_bytes(child.hash, file_name=child.id)
 
     def get_content(self, item_ref: str) -> ApiContent:
         """Fetch the `.content` JSON for an item."""
@@ -337,7 +348,9 @@ class Client(AuthenticatedClient):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for entry in manifest.entries:
-                archive.writestr(entry.id, self._get_hash_bytes(entry.hash))
+                archive.writestr(
+                    entry.id, self._get_hash_bytes(entry.hash, file_name=entry.id)
+                )
         return buffer.getvalue()
 
     def _write_download(
@@ -471,8 +484,14 @@ class Client(AuthenticatedClient):
             )
 
         content_entry = self._find_child_entry(manifest, ".content")
-        metadata = json.loads(self._get_hash_text(metadata_entry.hash))
-        content = json.loads(self._get_hash_text(content_entry.hash)) if content_entry else {}
+        metadata = json.loads(
+            self._get_hash_text(metadata_entry.hash, file_name=metadata_entry.id)
+        )
+        content = (
+            json.loads(self._get_hash_text(content_entry.hash, file_name=content_entry.id))
+            if content_entry
+            else {}
+        )
         tag_names = [
             tag.get("name", "") for tag in content.get("tags", []) if tag.get("name")
         ]
@@ -674,7 +693,12 @@ class Client(AuthenticatedClient):
         if metadata_index is None:
             raise DocumentNotFound(f"Metadata entry not found for {item_ref}")
 
-        metadata = json.loads(self._get_hash_text(item_entries[metadata_index].hash))
+        metadata = json.loads(
+            self._get_hash_text(
+                item_entries[metadata_index].hash,
+                file_name=item_entries[metadata_index].id,
+            )
+        )
         metadata.update(updates)
         item_entries[metadata_index] = self.put_metadata(item_entries[metadata_index].id, metadata)
         _, _, schema_version = self.get_root_state(refresh=refresh)
@@ -866,6 +890,7 @@ class Client(AuthenticatedClient):
                 }
             ),
             content=payload,
+            expected_statuses=(200, 201),
             retry_on_unauthorized=True,
         )
         payload_json = response.json()
