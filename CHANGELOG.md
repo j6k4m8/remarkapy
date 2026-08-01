@@ -1,6 +1,8 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## 0.3.0 - 2026-08-01
+
+-   Support for Python 3.11, 3.12, 3.13, and 3.14 in CI
 
 ## 0.2.2 - 2026-05-27
 
