@@ -40,6 +40,12 @@ ROOT_SPECIAL_ID = "root"
 ROOT_PARENT_ID = ""
 TRASH_PARENT_ID = "trash"
 
+# Root manifests are always written as schema 4. Migrated accounts reject
+# schema-3 root writes with `400 update-required` ("Software must be updated")
+# while `GET /sync/v4/root` still reports `schemaVersion: 3` for the same
+# account, so the read-side version cannot drive writes (#24).
+ROOT_WRITE_SCHEMA_VERSION = 4
+
 
 class Client(AuthenticatedClient):
     """A synchronous Python client for the reMarkable cloud API."""
@@ -563,15 +569,18 @@ class Client(AuthenticatedClient):
 
     def _put_blob(self, hash_value: str, file_name: str, payload: bytes) -> None:
         """Upload a raw blob to the immutable hash store."""
+        headers = {
+            "rm-filename": file_name,
+            "x-goog-hash": f"crc32c={self._crc32c_base64(payload)}",
+        }
+        if file_name == self._manifest_file_name(ROOT_SPECIAL_ID):
+            # rmapi sends this on root manifest uploads; httpx sends no
+            # content-type for raw bytes.
+            headers["content-type"] = "text/plain; charset=UTF-8"
         self._request(
             "PUT",
             f"{self.urls.files_root}/{hash_value}",
-            headers=self._user_headers(
-                {
-                    "rm-filename": file_name,
-                    "x-goog-hash": f"crc32c={self._crc32c_base64(payload)}",
-                }
-            ),
+            headers=self._user_headers(headers),
             content=payload,
             expected_statuses=(200, 202),
             retry_on_unauthorized=True,
@@ -642,11 +651,16 @@ class Client(AuthenticatedClient):
         """Return the current UNIX time in milliseconds as a string."""
         return str(int(time() * 1000))
 
-    def _commit_root_entries(
-        self, root_entries: list[RawEntry], generation: int, schema_version: int
-    ) -> None:
-        """Upload and activate a new root manifest."""
-        new_root_entry = self.put_entries(ROOT_SPECIAL_ID, root_entries, schema_version)
+    def _commit_root_entries(self, root_entries: list[RawEntry], generation: int) -> None:
+        """Upload and activate a new root manifest, always in schema 4.
+
+        The cloud keeps reporting the account's own `schemaVersion` afterwards
+        (a schema-3 account stays 3), so the cached root state is left to
+        `_put_root_hash` and item manifests keep following what the cloud reports.
+        """
+        new_root_entry = self.put_entries(
+            ROOT_SPECIAL_ID, root_entries, ROOT_WRITE_SCHEMA_VERSION
+        )
         self._put_root_hash(new_root_entry.hash, generation)
 
     def _replace_root_entry(
@@ -657,7 +671,7 @@ class Client(AuthenticatedClient):
         refresh: bool = False,
     ) -> SimpleEntry:
         """Replace one item entry inside the current root manifest."""
-        _, generation, schema_version, root_entries = self._get_root_entries(refresh=refresh)
+        _, generation, _, root_entries = self._get_root_entries(refresh=refresh)
         root_index = next(
             (index for index, entry in enumerate(root_entries) if entry.hash == current_hash),
             None,
@@ -665,16 +679,16 @@ class Client(AuthenticatedClient):
         if root_index is None:
             raise HashNotFoundError(f"Could not find item hash {current_hash}")
         root_entries[root_index] = new_item_entry
-        self._commit_root_entries(root_entries, generation, schema_version)
+        self._commit_root_entries(root_entries, generation)
         return SimpleEntry(id=new_item_entry.id, hash=new_item_entry.hash)
 
     def _append_root_entry(
         self, new_item_entry: RawEntry, *, refresh: bool = False
     ) -> SimpleEntry:
         """Append a new item entry to the current root manifest."""
-        _, generation, schema_version, root_entries = self._get_root_entries(refresh=refresh)
+        _, generation, _, root_entries = self._get_root_entries(refresh=refresh)
         root_entries.append(new_item_entry)
-        self._commit_root_entries(root_entries, generation, schema_version)
+        self._commit_root_entries(root_entries, generation)
         return SimpleEntry(id=new_item_entry.id, hash=new_item_entry.hash)
 
     def _edit_metadata(

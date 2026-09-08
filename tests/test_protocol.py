@@ -55,3 +55,14 @@ def test_schema4_manifest_hash_uses_payload_hash() -> None:
     payload = serialize_entries_manifest("root", entries, schema_version=4)
 
     assert compute_manifest_hash(entries, schema_version=4) == hashlib.sha256(payload).hexdigest()
+
+
+def test_schema4_serialization_retypes_schema3_item_marker() -> None:
+    """Schema-3 `80000000` item markers should become `0` when emitted as schema 4."""
+    entries = [RawEntry(id="item-id", hash="33" * 32, type=0x80000000, subfiles=2, size=20)]
+
+    v3 = serialize_entries_manifest("root", entries, schema_version=3).decode("utf-8")
+    v4 = serialize_entries_manifest("root", entries, schema_version=4).decode("utf-8")
+
+    assert v3 == f"3\n{'33' * 32}:80000000:item-id:2:20\n"
+    assert v4 == f"4\n0:.:1:20\n{'33' * 32}:0:item-id:2:20\n"

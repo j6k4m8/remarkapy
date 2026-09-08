@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - 2026-09-08
+
+### Fixed
+
+-   Wrote the root manifest as schema 4 on every commit instead of echoing the schema the cloud reports. Migrated accounts reject schema-3 root writes with `400 update-required` ("Software must be updated") while `GET /sync/v4/root` still reports `schemaVersion: 3` for the same account (#24). Entries carried over from a schema-3 root are retyped `0` on the way out.
+-   Sent `content-type: text/plain; charset=UTF-8` on `root.docSchema` uploads, matching rmapi.
+
 ## 0.3.0 - 2026-08-01
 
 -   Support for Python 3.11, 3.12, 3.13, and 3.14 in CI
