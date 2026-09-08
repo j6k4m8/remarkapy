@@ -38,6 +38,7 @@ class FakeRemarkableCloud:
         *,
         blob_put_status_code: int = 200,
         simple_upload_status_code: int = 200,
+        strict_root_schema: bool = False,
     ) -> None:
         self.device_token = "device-token"
         self.user_token = "user-token"
@@ -45,6 +46,11 @@ class FakeRemarkableCloud:
         self.schema_version = 3
         self.blob_put_status_code = blob_put_status_code
         self.simple_upload_status_code = simple_upload_status_code
+        # Mirror the 2026 cloud: schema-3 root manifests get `update-required`,
+        # unsorted root entries get `invalid root schema`, and the URL hash
+        # must be the SHA-256 of the body.
+        self.strict_root_schema = strict_root_schema
+        self.blob_puts: list[tuple[str, dict[str, str], bytes]] = []
         self.storage: dict[str, bytes] = {}
         self.hash_names: dict[str, str] = {}
         self.root_entries: list[RawEntry] = []
@@ -292,6 +298,24 @@ class FakeRemarkableCloud:
         if request.method == "PUT" and path.startswith("/sync/v3/files/"):
             hash_value = path.rsplit("/", 1)[-1]
             payload = request.content
+            file_name = request.headers.get("rm-filename", "")
+            self.blob_puts.append((file_name, dict(request.headers), payload))
+            if self.strict_root_schema and file_name == "root.docSchema":
+                lines = payload.decode("utf-8").splitlines()
+                if lines[0] != "4":
+                    return self._json(
+                        {
+                            "status": 400,
+                            "title": "Software must be updated",
+                            "type": "https://errors.cloud.remarkable.com/update-required",
+                        },
+                        status_code=400,
+                    )
+                ids = [line.split(":")[2] for line in lines[2:] if line]
+                if ids != sorted(ids):
+                    return self._text('{"message":"invalid root schema"}', status_code=400)
+                if hash_value != self._sha256(payload):
+                    return self._text('{"message":"invalid hash"}', status_code=400)
             self.storage[hash_value] = payload
             return self._text("ok", status_code=self.blob_put_status_code)
 
@@ -568,3 +592,45 @@ def test_simple_upload_pdf_accepts_http_201() -> None:
 
     assert cloud.last_simple_upload == {"name": "Browser.pdf", "mime_type": "application/pdf"}
     assert any(item.id == created.id for item in items)
+
+
+def _root_manifest_puts(cloud: FakeRemarkableCloud) -> list[tuple[dict[str, str], bytes]]:
+    """Return (headers, payload) for every root manifest the client uploaded."""
+    return [(headers, payload) for name, headers, payload in cloud.blob_puts if name == "root.docSchema"]
+
+
+def test_root_manifest_is_written_as_schema4_when_read_as_schema3() -> None:
+    """Root writes should emit schema 4 even when the cloud reports schema 3."""
+    cloud = FakeRemarkableCloud()
+    client = make_client(cloud)
+    assert client.get_root_state()[2] == 3
+
+    folder = client.put_folder("Inbox")
+
+    headers, payload = _root_manifest_puts(cloud)[-1]
+    lines = payload.decode("utf-8").splitlines()
+    entries = [line.split(":") for line in lines[2:]]
+    assert lines[0] == "4"
+    assert lines[1] == f"0:.:{len(entries)}:{sum(int(fields[4]) for fields in entries)}"
+    assert {fields[1] for fields in entries} == {"0"}
+    assert [fields[2] for fields in entries] == sorted(fields[2] for fields in entries)
+    assert cloud.root_hash == hashlib.sha256(payload).hexdigest()
+    assert headers["content-type"] == "text/plain; charset=UTF-8"
+    assert client.get_root_state()[2] == 3
+    assert any(item.id == folder.id for item in client.list_items(refresh=True))
+
+
+def test_writes_succeed_against_cloud_that_rejects_schema3_roots() -> None:
+    """Every root-rewriting operation should work on an account that requires schema 4."""
+    cloud = FakeRemarkableCloud(strict_root_schema=True)
+    client = make_client(cloud)
+    before_generation = cloud.generation
+
+    folder = client.put_folder("Inbox")
+    document = client.put_pdf("Hello.pdf", b"%PDF-1.4\nhello\n", parent=folder.id, refresh=True)
+    client.rename(document.hash, "Renamed.pdf", refresh=True)
+    client.delete(cloud.document.item_hash, refresh=True)
+    items = client.list_items(refresh=True)
+
+    assert cloud.generation == before_generation + 4
+    assert any(item.visibleName == "Renamed.pdf" for item in items)

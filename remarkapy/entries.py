@@ -220,7 +220,13 @@ def serialize_entries_manifest(
         schema_id = "." if manifest_id == "root" else manifest_id
         records.append(f"0:{schema_id}:{len(ordered)}:{total_size}\n")
     for entry in ordered:
-        entry_type = "80000000" if entry.type == 0x80000000 else str(entry.type)
+        # `80000000` is the schema-3 item marker. Schema 4 types every entry
+        # `0`, so entries carried over from a schema-3 root are retyped when
+        # the manifest is re-emitted as schema 4.
+        if entry.type == 0x80000000:
+            entry_type = "80000000" if schema_version == 3 else "0"
+        else:
+            entry_type = str(entry.type)
         records.append(
             f"{entry.hash}:{entry_type}:{entry.id}:{entry.subfiles}:{entry.size}\n"
         )
